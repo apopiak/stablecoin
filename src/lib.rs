@@ -3,10 +3,10 @@
 use sp_std::prelude::*;
 
 use codec::{Decode, Encode};
-use core::cmp::max;
-use core::cmp::min;
+use core::cmp::{max, min};
 use frame_support::{
 	debug::native, decl_event, decl_module, decl_storage, dispatch::DispatchResult, ensure,
+	traits::Get,
 };
 use num_rational::Ratio;
 use sp_std::collections::vec_deque::VecDeque;
@@ -17,6 +17,8 @@ use system::ensure_signed;
 pub trait Trait: system::Trait {
 	/// The overarching event type.
 	type Event: From<Event<Self>> + Into<<Self as system::Trait>::Event>;
+
+	type ExpirationPeriod: Get<<Self as system::Trait>::BlockNumber>;
 }
 
 const BASE_UNIT: u64 = 1000; // 1000 units are supposed to represent $1 USD
@@ -66,7 +68,7 @@ decl_event!(
 	}
 );
 
-// This pallet's storage items.
+// This pallet's storage items.bonds
 decl_storage! {
 	trait Store for Module<T: Trait> as Stablecoin {
 		Init get(fn initialized): bool = false;
@@ -148,6 +150,7 @@ decl_module! {
 			Ok(())
 		}
 
+		// TODO: actually implement or replace/remove
 		pub fn update_exchange_rate(origin, c_ratio: CustomRatio<u64>) -> DispatchResult {
 			let _who = ensure_signed(origin)?;
 
@@ -162,6 +165,52 @@ decl_module! {
 }
 
 impl<T: Trait> Module<T> {
+	fn add_bond(account: T::AccountId, payout: u64) {
+		let expiration = <system::Module<T>>::block_number() + T::ExpirationPeriod::get();
+		let bond = Bond {
+			account,
+			payout,
+			expiration,
+		};
+
+		let mut bonds = Self::bonds();
+		bonds.push_back(bond);
+		<Bonds<T>>::put(bonds);
+	}
+
+	fn expand_supply(amount: u64) {
+		let mut bonds = Self::bonds();
+		let mut remaining = amount;
+		while remaining > 0 && bonds.len() > 0 {
+			// bond has expired --> discard
+			if let Some(Bond { expiration, .. }) = bonds.front() {
+				if <system::Module<T>>::block_number() >= *expiration {
+					bonds.pop_front();
+					continue;
+				}
+			}
+			// bond covers the remaining amount --> update and finish up
+			if let Some(bond) = bonds.front_mut() {
+				if bond.payout > remaining {
+					bond.payout -= remaining;
+					<Balance<T>>::mutate(&bond.account, |b| *b += remaining);
+					remaining = 0;
+				}
+			// bond does not cover the remaining amount --> resolve and continue
+			} else if let Some(bond) = bonds.pop_front() {
+				assert!(
+					bond.payout <= remaining,
+					"payout should be less than the remaining amount"
+				);
+				<Balance<T>>::mutate(&bond.account, |b| *b += bond.payout);
+				remaining -= bond.payout;
+			}
+		}
+		if remaining > 0 {
+			Self::hand_out_coins_to_shareholders(remaining);
+		}
+	}
+
 	fn hand_out_coins_to_shareholders(amount: u64) {
 		let supply = Self::share_supply();
 		let shares = Self::shares();
@@ -174,11 +223,8 @@ impl<T: Trait> Module<T> {
 				break;
 			}
 			let max_payout = amount - amount_payed;
-			let extra_payout = if pay_extra && (i as u64) < amount % len {
-				1
-			} else {
-				0
-			};
+			let is_in_first_mod_len = (i as u64) < amount % len;
+			let extra_payout = if pay_extra && is_in_first_mod_len { 1 } else { 0 };
 			let payout = min(max_payout, num_shares * coins_per_share + extra_payout);
 			assert!(
 				amount_payed + payout <= amount,
@@ -188,7 +234,6 @@ impl<T: Trait> Module<T> {
 			<Balance<T>>::insert(&acc, balance + payout);
 			amount_payed += payout;
 		}
-		native::info!("amount: {}  |  amount_payed: {}", amount, amount_payed);
 		assert!(
 			amount_payed == amount,
 			"amount payed out should equal target amount"
