@@ -1,10 +1,10 @@
-# substrate-pallet-template
+# WIP stablecoin pallet
 
-This is a template for a Substrate pallet which lives as its own crate so it can be imported into multiple other runtimes. It is based on the ["template" pallet](https://github.com/paritytech/substrate/tree/master/bin/node-template/runtime/src/template.rs) which is included with the [Substrate node template](https://github.com/paritytech/substrate/tree/master/bin/node-template).
+a WIP sample implementation of a non-collateralized stablecoin on substrate 
 
-Check out the [HOWTO](HOWTO.md) to learn how to use this for your own runtime module.
+**Note: WIP, NOT production ready**
 
-This README should act as a general template for distributing your module to others.
+_________________________________________________________________
 
 ## Purpose
 
