@@ -5,10 +5,11 @@ use sp_std::prelude::*;
 use codec::{Decode, Encode};
 use core::cmp::{max, min};
 use frame_support::{
-	debug::native, decl_event, decl_module, decl_storage, dispatch::DispatchResult, ensure,
+	debug::native, decl_error, decl_event, decl_module, decl_storage, dispatch::DispatchResult, ensure,
 	traits::Get,
 };
 use num_rational::Ratio;
+use sp_runtime::{PerThing, Perbill, Fixed64};
 use sp_std::collections::vec_deque::VecDeque;
 use sp_std::iter;
 use system::ensure_signed;
@@ -19,17 +20,23 @@ pub trait Trait: system::Trait {
 	type Event: From<Event<Self>> + Into<<Self as system::Trait>::Event>;
 
 	type ExpirationPeriod: Get<<Self as system::Trait>::BlockNumber>;
+	type MaximumBids: Get<usize>;
 }
 
-const BASE_UNIT: u64 = 1000; // 1000 units are supposed to represent $1 USD
-const COIN_SUPPLY: u64 = BASE_UNIT * 100;
+pub type Coins = u64;
+
+const BASE_UNIT: Coins = 1000; // 1000 units are supposed to represent $1 USD
+const COIN_SUPPLY: Coins = BASE_UNIT * 100;
 const SHARE_SUPPLY: u64 = 100;
+
+const MINIMUM_BOND_PRICE: Perbill = Perbill::from_percent(10);
+const MINIMUM_BOND_AMOUNT: i64 = 1;
 
 #[derive(Encode, Decode, Default, Clone, PartialEq, PartialOrd, Eq, Ord)]
 #[cfg_attr(feature = "std", derive(Debug))]
 pub struct Bond<AccountId, BlockNumber> {
 	account: AccountId,
-	payout: u64,
+	payout: Coins,
 	expiration: BlockNumber,
 }
 
@@ -37,8 +44,18 @@ pub struct Bond<AccountId, BlockNumber> {
 #[cfg_attr(feature = "std", derive(Debug))]
 pub struct Bid<AccountId> {
 	account: AccountId,
-	quantity: u64,
-	price: u64,
+	price: Perbill,
+	price_in_coins: Coins,
+	quantity: Coins,
+}
+
+impl<AccountId> Bid<AccountId> {
+	fn new(account: AccountId, price: Perbill, quantity: Coins) -> Bid<AccountId> {
+		let price_in_coins = price * quantity;
+		Bid {
+			account, price, price_in_coins, quantity,
+		}
+	}
 }
 
 #[derive(Encode, Decode, Default, Clone, PartialEq)]
@@ -68,6 +85,12 @@ decl_event!(
 	}
 );
 
+decl_error!{
+	pub enum Error for Module<T: Trait> {
+		InsufficientBalance,
+	}
+}
+
 // This pallet's storage items.bonds
 decl_storage! {
 	trait Store for Module<T: Trait> as Stablecoin {
@@ -76,7 +99,7 @@ decl_storage! {
 		ShareSupply get(fn share_supply): u64;
 		Shares get(fn shares): Vec<(T::AccountId, u64)>;
 
-		Balance get(fn get_balance): map hasher(blake2_256) T::AccountId => u64;
+		Balance get(fn get_balance): map hasher(blake2_256) T::AccountId => Coins;
 
 		// TODO: limit the maximum bond size
 		Bonds get(fn bonds): VecDeque<Bond<T::AccountId, T::BlockNumber>>;
@@ -150,6 +173,26 @@ decl_module! {
 			Ok(())
 		}
 
+		pub fn bid_for_bond(origin, price: Perbill, amount: Fixed64) -> DispatchResult {
+			let who = ensure_signed(origin)?;
+
+			ensure!(price > MINIMUM_BOND_PRICE, "offered price is lower than the minimum");
+			ensure!(amount >= Fixed64::from_natural(MINIMUM_BOND_AMOUNT), "amount is lower than the minimum");
+
+			// amount > 1 and we want to calculate the amount of coins
+			// saturated_multiply_accumulate = int + self * int
+			// --> subtract 1 from amount
+			let amount = amount - Fixed64::from_natural(1);
+			let quantity = amount.saturated_multiply_accumulate(BASE_UNIT);
+			let price_in_coins = price * quantity;
+			<Balance<T>>::try_mutate(&who, |b| -> DispatchResult { b.checked_sub(price_in_coins).ok_or(Error::<T>::InsufficientBalance)?; Ok(()) })?;
+			Self::add_bid(Bid::new(who, price, quantity));
+
+			Ok(())
+		}
+
+		// TODO: implement cancelling bids
+
 		// TODO: actually implement or replace/remove
 		pub fn update_exchange_rate(origin, c_ratio: CustomRatio<u64>) -> DispatchResult {
 			let _who = ensure_signed(origin)?;
@@ -165,7 +208,45 @@ decl_module! {
 }
 
 impl<T: Trait> Module<T> {
-	fn add_bond(account: T::AccountId, payout: u64) {
+	fn add_bid(bid: Bid<T::AccountId>) {
+		let mut bids = Self::bond_bids();
+		
+		Self::_add_bid_to(bid, &mut bids);
+
+		<BondBids<T>>::put(bids);
+	}
+
+	fn _add_bid_to(bid: Bid<T::AccountId>, bids: &mut Vec<Bid<T::AccountId>>) {
+		let index: usize = bids
+			.binary_search_by(|&Bid { price, .. }| bid.price.cmp(&price)) // sort the bids from greatest to lowest
+			.unwrap_or_else(|i| i);
+		bids.insert(index, bid);
+		bids.truncate(T::MaximumBids::get());
+	}
+
+	fn contract_supply(amount: Coins) {
+		let mut bids = Self::bond_bids();
+		let mut remaining = amount;
+		while remaining > 0 && bids.len() > 0 {
+			let mut bid = bids.remove(0);
+			if bid.quantity >= remaining {
+				Self::add_bond(bid.account.clone(), remaining);
+				bid.quantity -= remaining;
+				bid.price_in_coins -= bid.price * remaining;
+				// re-add bid with reduced amount
+				if bid.quantity > 0 {
+					Self::_add_bid_to(bid, &mut bids);
+				}
+				remaining -= remaining;
+			} else {
+				let Bid {account, quantity, ..} = bid;
+				Self::add_bond(account, quantity);
+				remaining -= quantity;
+			}
+		}
+	}
+
+	fn add_bond(account: T::AccountId, payout: Coins) {
 		let expiration = <system::Module<T>>::block_number() + T::ExpirationPeriod::get();
 		let bond = Bond {
 			account,
@@ -193,7 +274,7 @@ impl<T: Trait> Module<T> {
 			if let Some(bond) = bonds.front_mut() {
 				if bond.payout > remaining {
 					bond.payout -= remaining;
-					<Balance<T>>::mutate(&bond.account, |b| *b += remaining);
+					<Balance<T>>::mutate(&bond.account, |b| *b += remaining * BASE_UNIT);
 					remaining = 0;
 				}
 			// bond does not cover the remaining amount --> resolve and continue
@@ -202,12 +283,13 @@ impl<T: Trait> Module<T> {
 					bond.payout <= remaining,
 					"payout should be less than the remaining amount"
 				);
-				<Balance<T>>::mutate(&bond.account, |b| *b += bond.payout);
+				<Balance<T>>::mutate(&bond.account, |b| *b += bond.payout * BASE_UNIT);
 				remaining -= bond.payout;
 			}
 		}
+		<Bonds<T>>::put(bonds);
 		if remaining > 0 {
-			Self::hand_out_coins_to_shareholders(remaining);
+			Self::hand_out_coins_to_shareholders(remaining * BASE_UNIT);
 		}
 	}
 
@@ -245,6 +327,7 @@ impl<T: Trait> Module<T> {
 #[cfg(test)]
 mod tests {
 	use super::*;
+	use itertools::Itertools;
 	use more_asserts::*;
 	use quickcheck::{QuickCheck, TestResult};
 
@@ -270,6 +353,11 @@ mod tests {
 		pub const MaximumBlockWeight: Weight = 1024;
 		pub const MaximumBlockLength: u32 = 2 * 1024;
 		pub const AvailableBlockRatio: Perbill = Perbill::from_percent(75);
+
+		// expire bonds quickly in tests
+		pub const ExpirationPeriod: u64 = 100;
+		// allow few bids
+		pub const MaximumBids: usize = 10;
 	}
 	impl system::Trait for Test {
 		type Origin = Origin;
@@ -294,6 +382,8 @@ mod tests {
 	}
 	impl Trait for Test {
 		type Event = ();
+		type ExpirationPeriod = ExpirationPeriod;
+		type MaximumBids = MaximumBids;
 	}
 	type Stablecoin = Module<Test>;
 
@@ -347,6 +437,36 @@ mod tests {
 	}
 
 	// ------------------------------------------------------------
+	// bids and bonds
+	#[test]
+	fn bids_are_sorted_highest_to_lowest() {
+		new_test_ext().execute_with(|| {
+			assert_ok!(Stablecoin::init(Origin::signed(1)));
+
+			Stablecoin::add_bid(1, BASE_UNIT / 4, 5);
+			Stablecoin::add_bid(1, BASE_UNIT / 3, 5);
+			Stablecoin::add_bid(1, BASE_UNIT / 2, 5);
+
+			let bids = Stablecoin::bond_bids();
+			let prices: Vec<u64> = bids.into_iter().map(|Bid {price, ..}| price).collect();
+			assert_eq!(prices, vec![BASE_UNIT / 2, BASE_UNIT / 3, BASE_UNIT / 4]);
+		});
+	}
+
+	#[test]
+	fn amount_of_bids_is_limited() {
+		new_test_ext().execute_with(|| {
+			assert_ok!(Stablecoin::init(Origin::signed(1)));
+
+			for _i in 0..(2 * MaximumBids::get()) {
+				Stablecoin::add_bid(1, BASE_UNIT / 4, 5);
+			}
+			
+			assert_eq!(Stablecoin::bond_bids().len(),  MaximumBids::get());
+		});
+	}
+
+	// ------------------------------------------------------------
 	// handout tests
 
 	#[test]
@@ -359,10 +479,10 @@ mod tests {
 			assert_eq!(Stablecoin::get_balance(1), COIN_SUPPLY / 10);
 			assert_eq!(Stablecoin::get_balance(10), COIN_SUPPLY / 10);
 
-			let amount = 30;
+			let amount = 30 * BASE_UNIT;
 			Stablecoin::hand_out_coins_to_shareholders(amount);
 
-			let amount_per_acc = 3;
+			let amount_per_acc = 3 * BASE_UNIT;
 			assert_eq!(
 				Stablecoin::get_balance(1),
 				COIN_SUPPLY / 10 + amount_per_acc
@@ -396,10 +516,10 @@ mod tests {
 			assert_eq!(Stablecoin::get_balance(1), COIN_SUPPLY / 10);
 			assert_eq!(Stablecoin::get_balance(10), COIN_SUPPLY / 10);
 
-			let amount = 8;
+			let amount = 8 * BASE_UNIT;
 			Stablecoin::hand_out_coins_to_shareholders(amount);
 
-			let amount_per_acc = 1;
+			let amount_per_acc = 1 * BASE_UNIT;
 			assert_eq!(
 				Stablecoin::get_balance(1),
 				COIN_SUPPLY / 10 + amount_per_acc
@@ -435,21 +555,21 @@ mod tests {
 			assert_eq!(Stablecoin::get_balance(1), COIN_SUPPLY / 10);
 			assert_eq!(Stablecoin::get_balance(10), COIN_SUPPLY / 10);
 
-			let amount = 13;
+			let amount = 13 * BASE_UNIT;
 			Stablecoin::hand_out_coins_to_shareholders(amount);
 
-			let amount_per_acc = 1;
+			let amount_per_acc = 1 * BASE_UNIT;
 			assert_eq!(
 				Stablecoin::get_balance(1),
-				COIN_SUPPLY / 10 + amount_per_acc + 1
+				COIN_SUPPLY / 10 + amount_per_acc + 1 * BASE_UNIT
 			);
 			assert_eq!(
 				Stablecoin::get_balance(2),
-				COIN_SUPPLY / 10 + amount_per_acc + 1
+				COIN_SUPPLY / 10 + amount_per_acc + 1 * BASE_UNIT
 			);
 			assert_eq!(
 				Stablecoin::get_balance(3),
-				COIN_SUPPLY / 10 + amount_per_acc + 1
+				COIN_SUPPLY / 10 + amount_per_acc + 1 * BASE_UNIT
 			);
 			assert_eq!(
 				Stablecoin::get_balance(4),
@@ -475,7 +595,7 @@ mod tests {
 				}
 
 				// Expect less than 1000 shareholders
-				let len = shareholders.len() as u64;
+				let len = shareholders.len();
 				if len < 1 || len > 999 {
 					return TestResult::discard();
 				}
@@ -484,16 +604,23 @@ mod tests {
 					return TestResult::discard();
 				}
 
+				if shareholders.iter().unique().count() != len {
+					return TestResult::discard();
+				}
+
 				assert_ok!(Stablecoin::init_with_shareholders(
 					Origin::signed(1),
 					shareholders.clone()
 				));
 
+				let amount = amount * BASE_UNIT;
 				Stablecoin::hand_out_coins_to_shareholders(amount);
 
+				let len = len as u64;
+				let payout = amount;
 				let balance = Stablecoin::get_balance(shareholders[0]);
-				assert_ge!(balance, COIN_SUPPLY / len + amount / len);
-				assert_le!(balance, COIN_SUPPLY / len + 1 + amount / len + 1);
+				assert_ge!(balance, COIN_SUPPLY / len + payout / len);
+				assert_le!(balance, COIN_SUPPLY / len + 1 + payout / len + 1);
 
 				TestResult::passed()
 			})
