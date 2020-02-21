@@ -443,13 +443,13 @@ mod tests {
 		new_test_ext().execute_with(|| {
 			assert_ok!(Stablecoin::init(Origin::signed(1)));
 
-			Stablecoin::add_bid(1, BASE_UNIT / 4, 5);
-			Stablecoin::add_bid(1, BASE_UNIT / 3, 5);
-			Stablecoin::add_bid(1, BASE_UNIT / 2, 5);
+			Stablecoin::add_bid(Bid::new(1, Perbill::from_percent(25), 5 * BASE_UNIT));
+			Stablecoin::add_bid(Bid::new(1, Perbill::from_percent(33), 5 * BASE_UNIT));
+			Stablecoin::add_bid(Bid::new(1, Perbill::from_percent(50), 5 * BASE_UNIT));
 
 			let bids = Stablecoin::bond_bids();
-			let prices: Vec<u64> = bids.into_iter().map(|Bid {price, ..}| price).collect();
-			assert_eq!(prices, vec![BASE_UNIT / 2, BASE_UNIT / 3, BASE_UNIT / 4]);
+			let prices: Vec<_> = bids.into_iter().map(|Bid {price, ..}| price).collect();
+			assert_eq!(prices, vec![Perbill::from_percent(50), Perbill::from_percent(33), Perbill::from_percent(25)]);
 		});
 	}
 
@@ -459,7 +459,7 @@ mod tests {
 			assert_ok!(Stablecoin::init(Origin::signed(1)));
 
 			for _i in 0..(2 * MaximumBids::get()) {
-				Stablecoin::add_bid(1, BASE_UNIT / 4, 5);
+				Stablecoin::add_bid(Bid::new(1, Perbill::from_percent(25), 5 * BASE_UNIT));
 			}
 			
 			assert_eq!(Stablecoin::bond_bids().len(),  MaximumBids::get());
@@ -516,10 +516,10 @@ mod tests {
 			assert_eq!(Stablecoin::get_balance(1), COIN_SUPPLY / 10);
 			assert_eq!(Stablecoin::get_balance(10), COIN_SUPPLY / 10);
 
-			let amount = 8 * BASE_UNIT;
+			let amount = 8;
 			Stablecoin::hand_out_coins_to_shareholders(amount);
 
-			let amount_per_acc = 1 * BASE_UNIT;
+			let amount_per_acc = 1;
 			assert_eq!(
 				Stablecoin::get_balance(1),
 				COIN_SUPPLY / 10 + amount_per_acc
@@ -555,21 +555,21 @@ mod tests {
 			assert_eq!(Stablecoin::get_balance(1), COIN_SUPPLY / 10);
 			assert_eq!(Stablecoin::get_balance(10), COIN_SUPPLY / 10);
 
-			let amount = 13 * BASE_UNIT;
+			let amount = 13;
 			Stablecoin::hand_out_coins_to_shareholders(amount);
 
-			let amount_per_acc = 1 * BASE_UNIT;
+			let amount_per_acc = 1;
 			assert_eq!(
 				Stablecoin::get_balance(1),
-				COIN_SUPPLY / 10 + amount_per_acc + 1 * BASE_UNIT
+				COIN_SUPPLY / 10 + amount_per_acc + 1
 			);
 			assert_eq!(
 				Stablecoin::get_balance(2),
-				COIN_SUPPLY / 10 + amount_per_acc + 1 * BASE_UNIT
+				COIN_SUPPLY / 10 + amount_per_acc + 1
 			);
 			assert_eq!(
 				Stablecoin::get_balance(3),
-				COIN_SUPPLY / 10 + amount_per_acc + 1 * BASE_UNIT
+				COIN_SUPPLY / 10 + amount_per_acc + 1
 			);
 			assert_eq!(
 				Stablecoin::get_balance(4),
@@ -588,7 +588,7 @@ mod tests {
 
 	#[test]
 	fn handout_quickcheck() {
-		fn property(shareholders: Vec<u64>, amount: u64) -> TestResult {
+		fn property(shareholders: Vec<u64>, amount: Coins) -> TestResult {
 			new_test_ext().execute_with(|| {
 				if amount == 0 {
 					return TestResult::discard();
@@ -613,7 +613,7 @@ mod tests {
 					shareholders.clone()
 				));
 
-				let amount = amount * BASE_UNIT;
+				let amount = amount;
 				Stablecoin::hand_out_coins_to_shareholders(amount);
 
 				let len = len as u64;
