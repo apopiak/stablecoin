@@ -254,14 +254,14 @@ impl<T: Trait> Module<T> {
 			return Err(DispatchError::from(Error::<T>::ZeroPrice));
 		}
 		if price > BASE_UNIT {
-			let ratio = Ratio::new(price, BASE_UNIT);
+			let fraction = Fixed64::from_rational(BASE_UNIT as i64, price) - Fixed64::from_natural(1);
 			let supply = Self::coin_supply();
-			let contract_by = (ratio * supply - supply).to_integer();
+			let contract_by = fraction.saturated_multiply_accumulate(supply) - supply;
 			Self::contract_supply(contract_by)?;
 		} else if price < BASE_UNIT {
-			let ratio = Ratio::new(BASE_UNIT, price);
+			let fraction = Fixed64::from_rational(BASE_UNIT as i64, price) - Fixed64::from_natural(1);
 			let supply = Self::coin_supply();
-			let expand_by = (ratio * supply - supply).to_integer();
+			let expand_by = fraction.saturated_multiply_accumulate(supply) - supply;
 			Self::expand_supply(expand_by)?;
 		} else {
 			native::info!("coin price is equal to base as is desired --> nothing to do");
@@ -741,7 +741,7 @@ mod tests {
 		}
 
 		QuickCheck::new()
-			.max_tests(10)
+			.max_tests(100)
 			.quickcheck(property as fn(Vec<u64>, u64) -> TestResult)
 	}
 
@@ -828,9 +828,9 @@ mod tests {
 
 	#[test]
 	fn expand_or_contract_quickcheck() {
-		fn property(price: Coins) -> TestResult {
+		fn property(bonds: Vec<(u64, u64)>, prices: Vec<Coins>) -> TestResult {
 			new_test_ext().execute_with(|| {
-				if price == 0 {
+				if prices.iter().any(|p| p == &0) {
 					return TestResult::discard();
 				}
 
@@ -839,15 +839,22 @@ mod tests {
 					vec![1, 2, 3, 4, 5, 6, 7, 8, 9, 10]
 				));
 
-				let price = price;
-				assert_ok!(Stablecoin::expand_or_contract_on_price(price));
+				for (account, payout) in bonds {
+					if account > 0 && payout > 0 {
+						Stablecoin::add_bond(account, payout);
+					}
+				}
+
+				for price in prices {
+					assert_ok!(Stablecoin::expand_or_contract_on_price(price));
+				}
 
 				TestResult::passed()
 			})
 		}
 
 		QuickCheck::new()
-			.max_tests(10)
-			.quickcheck(property as fn(u64) -> TestResult)
+			.max_tests(100)
+			.quickcheck(property as fn(Vec<(u64, u64)>, Vec<u64>) -> TestResult)
 	}
 }
