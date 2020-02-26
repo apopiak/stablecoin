@@ -91,22 +91,6 @@ impl<AccountId> Bid<AccountId> {
 	}
 }
 
-#[derive(Encode, Decode, Default, Clone, PartialEq)]
-#[cfg_attr(feature = "std", derive(Debug))]
-pub struct CustomRatio<T>(T, T);
-
-impl<T: Copy> From<Ratio<T>> for CustomRatio<T> {
-	fn from(r: Ratio<T>) -> CustomRatio<T> {
-		CustomRatio(*r.numer(), *r.denom())
-	}
-}
-
-impl<T: Copy> Into<Ratio<T>> for CustomRatio<T> {
-	fn into(self: CustomRatio<T>) -> Ratio<T> {
-		Ratio::new_raw(self.0, self.1)
-	}
-}
-
 decl_event!(
 	pub enum Event<T>
 	where
@@ -150,8 +134,6 @@ decl_storage! {
 
 		// TODO: how to implement continuous auction/priority queue
 		BondBids get(fn bond_bids): Vec<Bid<T::AccountId>>;
-
-		ExchangeRate get(fn exchange_rate): CustomRatio<u64>;
 	}
 }
 
@@ -238,18 +220,6 @@ decl_module! {
 
 		// TODO: implement cancelling bids
 
-		// TODO: actually implement or replace/remove
-		pub fn update_exchange_rate(origin, c_ratio: CustomRatio<u64>) -> DispatchResult {
-			let _who = ensure_signed(origin)?;
-
-			let mut ratio: Ratio<u64> = c_ratio.into();
-			ratio += Ratio::new(4, 5);
-			let custom_ratio: CustomRatio<u64> = ratio.into();
-			<ExchangeRate>::put(custom_ratio);
-
-			Ok(())
-		}
-
 		fn on_initialize(_n: T::BlockNumber) {
 			let price = T::CoinPrice::fetch_price();
 			Self::expand_or_contract_on_price(price);
@@ -333,6 +303,7 @@ impl<T: Trait> Module<T> {
 				remaining -= price_in_coins;
 			}
 		}
+		<CoinSupply>::put(<CoinSupply>::get() - (amount - remaining));
 		<BondBids<T>>::put(bids);
 		Ok(())
 	}
@@ -444,6 +415,7 @@ mod tests {
 	use std::sync::atomic::{AtomicU64, Ordering};
 
 	use frame_support::{assert_ok, impl_outer_origin, parameter_types, weights::Weight};
+	use system;
 	use sp_core::H256;
 	use sp_runtime::{
 		testing::Header,
@@ -477,6 +449,7 @@ mod tests {
 	// configuration traits of modules we want to use.
 	#[derive(Clone, Eq, PartialEq)]
 	pub struct Test;
+
 	parameter_types! {
 		pub const BlockHashCount: u64 = 250;
 		pub const MaximumBlockWeight: Weight = 1024;
@@ -518,6 +491,7 @@ mod tests {
 		type CoinPrice = RandomPrice;
 	}
 
+	type System = system::Module<Test>;
 	type Stablecoin = Module<Test>;
 
 	// This function basically just builds a genesis storage key/value store according to
@@ -622,8 +596,30 @@ mod tests {
 			let bonds = Stablecoin::bonds();
 			assert_eq!(bonds.len(), 1);
 			let bond = &bonds[0];
-			assert_eq!(bond.expiration, 101);
+			assert_eq!(bond.expiration, ExpirationPeriod::get() + 1);
 		})
+	}
+
+	#[test]
+	fn expire_bonds() {
+		new_test_ext().execute_with(|| {
+			assert_ok!(Stablecoin::init(Origin::signed(1)));
+			Stablecoin::add_bond(
+				3,
+				Fixed64::from_rational(20, 100).saturated_multiply_accumulate(BASE_UNIT),
+			);
+
+			let bonds = Stablecoin::bonds();
+			assert_eq!(bonds.len(), 1);
+			let bond = &bonds[0];
+			assert_eq!(bond.expiration, 101);
+
+			let prev_supply = Stablecoin::coin_supply();
+			// set blocknumber past expiration time
+			System::set_block_number(ExpirationPeriod::get() + 20);
+			assert_ok!(Stablecoin::contract_supply(42));
+			assert_eq!(prev_supply, Stablecoin::coin_supply(), "coin supply should not change as the bond expired");
+		});
 	}
 
 	// ------------------------------------------------------------
@@ -789,18 +785,18 @@ mod tests {
 			Stablecoin::add_bid(Bid::new(2, Perbill::from_percent(75), 2 * BASE_UNIT));
 			log::debug!("bids before: {:?}", Stablecoin::bond_bids());
 			log::debug!("bonds before: {:?}", Stablecoin::bonds());
-
+			
 			let prev_supply = Stablecoin::coin_supply();
 			let amount = 2 * BASE_UNIT;
-			assert_ok!(Stablecoin::contract_supply(amount));
 			log::debug!("----- contract supply -----");
+			assert_ok!(Stablecoin::contract_supply(amount));
 
 			let bids = Stablecoin::bond_bids();
 			let bonds = Stablecoin::bonds();
 			log::debug!("bids after: {:?}", bids);
 			log::debug!("bonds after: {:?}", bonds);
 			assert_eq!(bids.len(), 1, "exactly one bond should have been removed");
-			let remainging_bid_quantity = Ratio::new(666_666_666, 1_000_000_000)
+			let remainging_bid_quantity = Ratio::new(667, 1_000)
 				.checked_mul(&mut BASE_UNIT.into())
 				.map(|r| r.to_integer())
 				.unwrap();
@@ -808,8 +804,8 @@ mod tests {
 				bids[0],
 				Bid::new(2, Perbill::from_percent(75), remainging_bid_quantity)
 			);
-			assert_eq!(bonds[0].payout, BASE_UNIT);
-			assert_eq!(bonds[1].payout, BASE_UNIT);
+			assert_eq!(bonds[0].payout, bond_amount);
+			assert_eq!(bonds[1].payout, Fixed64::from_rational(333, 1000).saturated_multiply_accumulate(BASE_UNIT));
 
 			assert_eq!(
 				Stablecoin::coin_supply(),
