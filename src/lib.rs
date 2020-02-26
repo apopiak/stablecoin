@@ -5,11 +5,14 @@ use sp_std::prelude::*;
 use codec::{Decode, Encode};
 use core::cmp::{max, min};
 use frame_support::{
-	debug::native, decl_error, decl_event, decl_module, decl_storage, dispatch::{DispatchResult, DispatchError}, ensure,
-	traits::{Currency, Get,},
+	debug::native,
+	decl_error, decl_event, decl_module, decl_storage,
+	dispatch::{DispatchError, DispatchResult},
+	ensure,
+	traits::{Currency, Get},
 };
 use num_rational::Ratio;
-use sp_runtime::{PerThing, Perbill, Fixed64, traits::{CheckedMul}};
+use sp_runtime::{traits::CheckedMul, Fixed64, PerThing, Perbill};
 use sp_std::collections::vec_deque::VecDeque;
 use sp_std::iter;
 use system::ensure_signed;
@@ -64,7 +67,10 @@ impl<AccountId> Bid<AccountId> {
 	fn new(account: AccountId, price: Perbill, quantity: Coins) -> Bid<AccountId> {
 		let price_in_coins = price * quantity;
 		Bid {
-			account, price, price_in_coins, quantity,
+			account,
+			price,
+			price_in_coins,
+			quantity,
 		}
 	}
 }
@@ -96,7 +102,7 @@ decl_event!(
 	}
 );
 
-decl_error!{
+decl_error! {
 	pub enum Error for Module<T: Trait> {
 		InsufficientBalance,
 		CoinOverflow,
@@ -230,7 +236,7 @@ decl_module! {
 impl<T: Trait> Module<T> {
 	fn add_bid(bid: Bid<T::AccountId>) {
 		let mut bids = Self::bond_bids();
-		
+
 		Self::_add_bid_to(bid, &mut bids);
 
 		<BondBids<T>>::put(bids);
@@ -239,7 +245,7 @@ impl<T: Trait> Module<T> {
 	fn _add_bid_to(bid: Bid<T::AccountId>, bids: &mut Vec<Bid<T::AccountId>>) {
 		let index: usize = bids
 			// sort the bids from greatest to lowest
-			.binary_search_by(|&Bid { price, .. }| bid.price.cmp(&price)) 
+			.binary_search_by(|&Bid { price, .. }| bid.price.cmp(&price))
 			.unwrap_or_else(|i| i);
 		bids.insert(index, bid);
 		bids.truncate(T::MaximumBids::get());
@@ -294,7 +300,9 @@ impl<T: Trait> Module<T> {
 				}
 				remaining -= remaining;
 			} else {
-				let Bid {account, quantity, ..} = bid;
+				let Bid {
+					account, quantity, ..
+				} = bid;
 				Self::add_bond(account, quantity);
 				remaining -= quantity;
 			}
@@ -315,7 +323,7 @@ impl<T: Trait> Module<T> {
 		<Bonds<T>>::put(bonds);
 	}
 
-	fn expand_supply(amount: Coins) -> DispatchResult{
+	fn expand_supply(amount: Coins) -> DispatchResult {
 		let mut bonds = Self::bonds();
 		Self::test_increase_coin_supply(amount)?;
 		let mut remaining = amount;
@@ -404,8 +412,8 @@ mod tests {
 	use itertools::Itertools;
 	use more_asserts::*;
 	use quickcheck::{QuickCheck, TestResult};
+	use rand::{thread_rng, Rng};
 	use std::sync::atomic::{AtomicU64, Ordering};
-	use rand::{Rng, thread_rng};
 
 	use frame_support::{assert_ok, impl_outer_origin, parameter_types, weights::Weight};
 	use sp_core::H256;
@@ -427,7 +435,10 @@ mod tests {
 			let prev = LAST_PRICE.load(Ordering::SeqCst);
 			let random = thread_rng().gen_range(500, 1500);
 			let ratio: Ratio<u64> = Ratio::new(random, 1000);
-			let next = ratio.checked_mul(&mut prev.into()).map(|r| r.to_integer()).unwrap_or(prev);
+			let next = ratio
+				.checked_mul(&mut prev.into())
+				.map(|r| r.to_integer())
+				.unwrap_or(prev);
 			LAST_PRICE.store(next, Ordering::SeqCst);
 			prev
 		}
@@ -484,7 +495,10 @@ mod tests {
 	// This function basically just builds a genesis storage key/value store according to
 	// our desired mockup.
 	fn new_test_ext() -> sp_io::TestExternalities {
-		system::GenesisConfig::default().build_storage::<Test>().unwrap().into()
+		system::GenesisConfig::default()
+			.build_storage::<Test>()
+			.unwrap()
+			.into()
 	}
 
 	// ------------------------------------------------------------
@@ -542,8 +556,15 @@ mod tests {
 			Stablecoin::add_bid(Bid::new(1, Perbill::from_percent(50), 5 * BASE_UNIT));
 
 			let bids = Stablecoin::bond_bids();
-			let prices: Vec<_> = bids.into_iter().map(|Bid {price, ..}| price).collect();
-			assert_eq!(prices, vec![Perbill::from_percent(50), Perbill::from_percent(33), Perbill::from_percent(25)]);
+			let prices: Vec<_> = bids.into_iter().map(|Bid { price, .. }| price).collect();
+			assert_eq!(
+				prices,
+				vec![
+					Perbill::from_percent(50),
+					Perbill::from_percent(33),
+					Perbill::from_percent(25)
+				]
+			);
 		});
 	}
 
@@ -555,7 +576,7 @@ mod tests {
 			for _i in 0..(2 * MaximumBids::get()) {
 				Stablecoin::add_bid(Bid::new(1, Perbill::from_percent(25), 5 * BASE_UNIT));
 			}
-			
+
 			assert_eq!(Stablecoin::bond_bids().len(), MaximumBids::get());
 		});
 	}
@@ -565,7 +586,10 @@ mod tests {
 		new_test_ext().execute_with(|| {
 			assert_ok!(Stablecoin::init(Origin::signed(1)));
 
-			Stablecoin::add_bond(3, Fixed64::from_rational(20, 100).saturated_multiply_accumulate(BASE_UNIT));
+			Stablecoin::add_bond(
+				3,
+				Fixed64::from_rational(20, 100).saturated_multiply_accumulate(BASE_UNIT),
+			);
 
 			let bonds = Stablecoin::bonds();
 			assert_eq!(bonds.len(), 1);
@@ -591,26 +615,11 @@ mod tests {
 			Stablecoin::hand_out_coins_to_shareholders(amount);
 
 			let amount_per_acc = 3 * BASE_UNIT;
-			assert_eq!(
-				Stablecoin::get_balance(1),
-				COIN_SUPPLY / 10 + amount_per_acc
-			);
-			assert_eq!(
-				Stablecoin::get_balance(2),
-				COIN_SUPPLY / 10 + amount_per_acc
-			);
-			assert_eq!(
-				Stablecoin::get_balance(3),
-				COIN_SUPPLY / 10 + amount_per_acc
-			);
-			assert_eq!(
-				Stablecoin::get_balance(7),
-				COIN_SUPPLY / 10 + amount_per_acc
-			);
-			assert_eq!(
-				Stablecoin::get_balance(10),
-				COIN_SUPPLY / 10 + amount_per_acc
-			);
+			assert_eq!(Stablecoin::get_balance(1), COIN_SUPPLY / 10 + amount_per_acc);
+			assert_eq!(Stablecoin::get_balance(2), COIN_SUPPLY / 10 + amount_per_acc);
+			assert_eq!(Stablecoin::get_balance(3), COIN_SUPPLY / 10 + amount_per_acc);
+			assert_eq!(Stablecoin::get_balance(7), COIN_SUPPLY / 10 + amount_per_acc);
+			assert_eq!(Stablecoin::get_balance(10), COIN_SUPPLY / 10 + amount_per_acc);
 		});
 	}
 
@@ -628,26 +637,11 @@ mod tests {
 			Stablecoin::hand_out_coins_to_shareholders(amount);
 
 			let amount_per_acc = 1;
-			assert_eq!(
-				Stablecoin::get_balance(1),
-				COIN_SUPPLY / 10 + amount_per_acc
-			);
-			assert_eq!(
-				Stablecoin::get_balance(2),
-				COIN_SUPPLY / 10 + amount_per_acc
-			);
-			assert_eq!(
-				Stablecoin::get_balance(3),
-				COIN_SUPPLY / 10 + amount_per_acc
-			);
-			assert_eq!(
-				Stablecoin::get_balance(7),
-				COIN_SUPPLY / 10 + amount_per_acc
-			);
-			assert_eq!(
-				Stablecoin::get_balance(8),
-				COIN_SUPPLY / 10 + amount_per_acc
-			);
+			assert_eq!(Stablecoin::get_balance(1), COIN_SUPPLY / 10 + amount_per_acc);
+			assert_eq!(Stablecoin::get_balance(2), COIN_SUPPLY / 10 + amount_per_acc);
+			assert_eq!(Stablecoin::get_balance(3), COIN_SUPPLY / 10 + amount_per_acc);
+			assert_eq!(Stablecoin::get_balance(7), COIN_SUPPLY / 10 + amount_per_acc);
+			assert_eq!(Stablecoin::get_balance(8), COIN_SUPPLY / 10 + amount_per_acc);
 			assert_eq!(Stablecoin::get_balance(9), COIN_SUPPLY / 10);
 			assert_eq!(Stablecoin::get_balance(10), COIN_SUPPLY / 10);
 		});
@@ -667,30 +661,12 @@ mod tests {
 			Stablecoin::hand_out_coins_to_shareholders(amount);
 
 			let amount_per_acc = 1;
-			assert_eq!(
-				Stablecoin::get_balance(1),
-				COIN_SUPPLY / 10 + amount_per_acc + 1
-			);
-			assert_eq!(
-				Stablecoin::get_balance(2),
-				COIN_SUPPLY / 10 + amount_per_acc + 1
-			);
-			assert_eq!(
-				Stablecoin::get_balance(3),
-				COIN_SUPPLY / 10 + amount_per_acc + 1
-			);
-			assert_eq!(
-				Stablecoin::get_balance(4),
-				COIN_SUPPLY / 10 + amount_per_acc
-			);
-			assert_eq!(
-				Stablecoin::get_balance(8),
-				COIN_SUPPLY / 10 + amount_per_acc
-			);
-			assert_eq!(
-				Stablecoin::get_balance(10),
-				COIN_SUPPLY / 10 + amount_per_acc
-			);
+			assert_eq!(Stablecoin::get_balance(1), COIN_SUPPLY / 10 + amount_per_acc + 1);
+			assert_eq!(Stablecoin::get_balance(2), COIN_SUPPLY / 10 + amount_per_acc + 1);
+			assert_eq!(Stablecoin::get_balance(3), COIN_SUPPLY / 10 + amount_per_acc + 1);
+			assert_eq!(Stablecoin::get_balance(4), COIN_SUPPLY / 10 + amount_per_acc);
+			assert_eq!(Stablecoin::get_balance(8), COIN_SUPPLY / 10 + amount_per_acc);
+			assert_eq!(Stablecoin::get_balance(10), COIN_SUPPLY / 10 + amount_per_acc);
 		});
 	}
 
@@ -741,4 +717,26 @@ mod tests {
 
 	// ------------------------------------------------------------
 	// expand and contract tests
+	#[test]
+	fn expand_supply_test() {
+		new_test_ext().execute_with(|| {
+			assert_ok!(Stablecoin::init_with_shareholders(
+				Origin::signed(1),
+				vec![1, 2, 3, 4, 5, 6, 7, 8, 9, 10]
+			));
+			assert_eq!(Stablecoin::get_balance(1), COIN_SUPPLY / 10);
+			assert_eq!(Stablecoin::get_balance(10), COIN_SUPPLY / 10);
+
+			let amount = 13;
+			Stablecoin::expand_supply(amount);
+
+			let amount_per_acc = 1;
+			assert_eq!(Stablecoin::get_balance(1), COIN_SUPPLY / 10 + amount_per_acc + 1);
+			assert_eq!(Stablecoin::get_balance(2), COIN_SUPPLY / 10 + amount_per_acc + 1);
+			assert_eq!(Stablecoin::get_balance(3), COIN_SUPPLY / 10 + amount_per_acc + 1);
+			assert_eq!(Stablecoin::get_balance(4), COIN_SUPPLY / 10 + amount_per_acc);
+			assert_eq!(Stablecoin::get_balance(8), COIN_SUPPLY / 10 + amount_per_acc);
+			assert_eq!(Stablecoin::get_balance(10), COIN_SUPPLY / 10 + amount_per_acc);
+		});
+	}
 }
