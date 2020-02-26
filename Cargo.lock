@@ -1527,6 +1527,7 @@ dependencies = [
  "num-rational",
  "parity-scale-codec",
  "quickcheck",
+ "rand 0.7.3",
  "serde",
  "sp-core",
  "sp-io",

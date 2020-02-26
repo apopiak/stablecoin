@@ -5,21 +5,32 @@ use sp_std::prelude::*;
 use codec::{Decode, Encode};
 use core::cmp::{max, min};
 use frame_support::{
-	debug::native, decl_error, decl_event, decl_module, decl_storage, dispatch::DispatchResult, ensure,
-	traits::Get,
+	debug::native, decl_error, decl_event, decl_module, decl_storage, dispatch::{DispatchResult, DispatchError}, ensure,
+	traits::{Currency, Get,},
 };
 use num_rational::Ratio;
-use sp_runtime::{PerThing, Perbill, Fixed64};
+use sp_runtime::{PerThing, Perbill, Fixed64, traits::{CheckedMul}};
 use sp_std::collections::vec_deque::VecDeque;
 use sp_std::iter;
 use system::ensure_signed;
+
+/// Trait for getting a price.
+pub trait FetchPrice<Balance> {
+	/// Fetch the price.
+	fn fetch_price() -> Balance;
+}
 
 /// The pallet's configuration trait.
 pub trait Trait: system::Trait {
 	/// The overarching event type.
 	type Event: From<Event<Self>> + Into<<Self as system::Trait>::Event>;
 
+	/// The amount of coins necessary to buy the tracked value
+	type CoinPrice: FetchPrice<Coins>;
+
+	/// The expiration time of a bond
 	type ExpirationPeriod: Get<<Self as system::Trait>::BlockNumber>;
+	/// The maximum amount of bids allowed in the queue
 	type MaximumBids: Get<usize>;
 }
 
@@ -88,6 +99,8 @@ decl_event!(
 decl_error!{
 	pub enum Error for Module<T: Trait> {
 		InsufficientBalance,
+		CoinOverflow,
+		CoinUnderflow,
 	}
 }
 
@@ -100,6 +113,7 @@ decl_storage! {
 		Shares get(fn shares): Vec<(T::AccountId, u64)>;
 
 		Balance get(fn get_balance): map hasher(blake2_256) T::AccountId => Coins;
+		CoinSupply get(fn coin_supply): Coins;
 
 		// TODO: limit the maximum bond size
 		Bonds get(fn bonds): VecDeque<Bond<T::AccountId, T::BlockNumber>>;
@@ -127,6 +141,7 @@ decl_module! {
 			<ShareSupply>::put(SHARE_SUPPLY);
 
 			<Balance<T>>::insert(&founder, COIN_SUPPLY);
+			<CoinSupply>::put(COIN_SUPPLY);
 
 			<Init>::put(true);
 
@@ -204,6 +219,11 @@ decl_module! {
 
 			Ok(())
 		}
+
+		fn on_initialize(_n: T::BlockNumber) {
+			let price = T::CoinPrice::fetch_price();
+			Self::expand_or_contract_on_price(price);
+		}
 	}
 }
 
@@ -218,14 +238,49 @@ impl<T: Trait> Module<T> {
 
 	fn _add_bid_to(bid: Bid<T::AccountId>, bids: &mut Vec<Bid<T::AccountId>>) {
 		let index: usize = bids
-			.binary_search_by(|&Bid { price, .. }| bid.price.cmp(&price)) // sort the bids from greatest to lowest
+			// sort the bids from greatest to lowest
+			.binary_search_by(|&Bid { price, .. }| bid.price.cmp(&price)) 
 			.unwrap_or_else(|i| i);
 		bids.insert(index, bid);
 		bids.truncate(T::MaximumBids::get());
 	}
 
-	fn contract_supply(amount: Coins) {
+	fn expand_or_contract_on_price(price: Coins) {
+		if price == 0 {
+			native::error!("coin price is zero!");
+			return;
+		}
+		if price > BASE_UNIT {
+			let ratio = Ratio::new(price, BASE_UNIT);
+			let supply = Self::coin_supply();
+			let contract_by = (ratio * supply - supply).to_integer();
+			Self::contract_supply(contract_by).unwrap_or_else(|e| {
+				native::error!("could not expand supply: {:?}", e);
+			});
+		} else if price < BASE_UNIT {
+			let ratio = Ratio::new(BASE_UNIT, price);
+			let supply = Self::coin_supply();
+			let expand_by = (ratio * supply - supply).to_integer();
+			Self::expand_supply(expand_by).unwrap_or_else(|e| {
+				native::error!("could not expand supply: {:?}", e);
+			});
+		} else {
+			native::info!("coin price is equal to base as it should be");
+		}
+	}
+
+	fn test_decrease_coin_supply(amount: Coins) -> DispatchResult {
+		let coin_supply = Self::coin_supply();
+		let remaining_supply = coin_supply.checked_sub(amount).ok_or(Error::<T>::CoinUnderflow)?;
+		if remaining_supply < 1 {
+			return Err(DispatchError::from(Error::<T>::CoinOverflow));
+		}
+		Ok(())
+	}
+
+	fn contract_supply(amount: Coins) -> DispatchResult {
 		let mut bids = Self::bond_bids();
+		Self::test_decrease_coin_supply(amount)?;
 		let mut remaining = amount;
 		while remaining > 0 && bids.len() > 0 {
 			let mut bid = bids.remove(0);
@@ -244,6 +299,7 @@ impl<T: Trait> Module<T> {
 				remaining -= quantity;
 			}
 		}
+		Ok(())
 	}
 
 	fn add_bond(account: T::AccountId, payout: Coins) {
@@ -259,8 +315,9 @@ impl<T: Trait> Module<T> {
 		<Bonds<T>>::put(bonds);
 	}
 
-	fn expand_supply(amount: u64) {
+	fn expand_supply(amount: Coins) -> DispatchResult{
 		let mut bonds = Self::bonds();
+		Self::test_increase_coin_supply(amount)?;
 		let mut remaining = amount;
 		while remaining > 0 && bonds.len() > 0 {
 			// bond has expired --> discard
@@ -274,7 +331,7 @@ impl<T: Trait> Module<T> {
 			if let Some(bond) = bonds.front_mut() {
 				if bond.payout > remaining {
 					bond.payout -= remaining;
-					<Balance<T>>::mutate(&bond.account, |b| *b += remaining * BASE_UNIT);
+					<Balance<T>>::mutate(&bond.account, |b| *b += remaining);
 					remaining = 0;
 				}
 			// bond does not cover the remaining amount --> resolve and continue
@@ -283,23 +340,39 @@ impl<T: Trait> Module<T> {
 					bond.payout <= remaining,
 					"payout should be less than the remaining amount"
 				);
-				<Balance<T>>::mutate(&bond.account, |b| *b += bond.payout * BASE_UNIT);
+				<Balance<T>>::mutate(&bond.account, |b| *b += bond.payout);
 				remaining -= bond.payout;
 			}
 		}
+		Self::try_increase_coin_supply(amount - remaining)?;
 		<Bonds<T>>::put(bonds);
 		if remaining > 0 {
-			Self::hand_out_coins_to_shareholders(remaining * BASE_UNIT);
+			Self::hand_out_coins_to_shareholders(remaining)?;
 		}
+		Ok(())
 	}
 
-	fn hand_out_coins_to_shareholders(amount: u64) {
+	fn test_increase_coin_supply(amount: Coins) -> DispatchResult {
+		let coin_supply = Self::coin_supply();
+		coin_supply.checked_add(amount).ok_or(Error::<T>::CoinOverflow)?;
+		Ok(())
+	}
+
+	fn try_increase_coin_supply(amount: Coins) -> DispatchResult {
+		let mut coin_supply = Self::coin_supply();
+		coin_supply = coin_supply.checked_add(amount).ok_or(Error::<T>::CoinOverflow)?;
+		<CoinSupply>::put(coin_supply);
+		Ok(())
+	}
+
+	fn hand_out_coins_to_shareholders(amount: Coins) -> DispatchResult {
 		let supply = Self::share_supply();
 		let shares = Self::shares();
 		let len = shares.len() as u64;
 		let coins_per_share = max(1, amount / supply);
 		let pay_extra = coins_per_share * len < amount;
 		let mut amount_payed = 0;
+		Self::try_increase_coin_supply(amount)?;
 		for (i, (acc, num_shares)) in shares.into_iter().enumerate() {
 			if amount_payed >= amount {
 				break;
@@ -320,6 +393,7 @@ impl<T: Trait> Module<T> {
 			amount_payed == amount,
 			"amount payed out should equal target amount"
 		);
+		Ok(())
 	}
 }
 
@@ -330,6 +404,8 @@ mod tests {
 	use itertools::Itertools;
 	use more_asserts::*;
 	use quickcheck::{QuickCheck, TestResult};
+	use std::sync::atomic::{AtomicU64, Ordering};
+	use rand::{Rng, thread_rng};
 
 	use frame_support::{assert_ok, impl_outer_origin, parameter_types, weights::Weight};
 	use sp_core::H256;
@@ -341,6 +417,20 @@ mod tests {
 
 	impl_outer_origin! {
 		pub enum Origin for Test {}
+	}
+
+	static LAST_PRICE: AtomicU64 = AtomicU64::new(BASE_UNIT);
+	struct RandomPrice;
+
+	impl FetchPrice<Coins> for RandomPrice {
+		fn fetch_price() -> Coins {
+			let prev = LAST_PRICE.load(Ordering::SeqCst);
+			let random = thread_rng().gen_range(500, 1500);
+			let ratio: Ratio<u64> = Ratio::new(random, 1000);
+			let next = ratio.checked_mul(&mut prev.into()).map(|r| r.to_integer()).unwrap_or(prev);
+			LAST_PRICE.store(next, Ordering::SeqCst);
+			prev
+		}
 	}
 
 	// For testing the pallet, we construct most of a mock runtime. This means
@@ -359,6 +449,7 @@ mod tests {
 		// allow few bids
 		pub const MaximumBids: usize = 10;
 	}
+
 	impl system::Trait for Test {
 		type Origin = Origin;
 		type Call = ();
@@ -380,11 +471,14 @@ mod tests {
 		type OnNewAccount = ();
 		type OnReapAccount = ();
 	}
+
 	impl Trait for Test {
 		type Event = ();
 		type ExpirationPeriod = ExpirationPeriod;
 		type MaximumBids = MaximumBids;
+		type CoinPrice = RandomPrice;
 	}
+
 	type Stablecoin = Module<Test>;
 
 	// This function basically just builds a genesis storage key/value store according to
@@ -462,8 +556,22 @@ mod tests {
 				Stablecoin::add_bid(Bid::new(1, Perbill::from_percent(25), 5 * BASE_UNIT));
 			}
 			
-			assert_eq!(Stablecoin::bond_bids().len(),  MaximumBids::get());
+			assert_eq!(Stablecoin::bond_bids().len(), MaximumBids::get());
 		});
+	}
+
+	#[test]
+	fn adding_bonds() {
+		new_test_ext().execute_with(|| {
+			assert_ok!(Stablecoin::init(Origin::signed(1)));
+
+			Stablecoin::add_bond(3, Fixed64::from_rational(20, 100).saturated_multiply_accumulate(BASE_UNIT));
+
+			let bonds = Stablecoin::bonds();
+			assert_eq!(bonds.len(), 1);
+			let bond = bonds[0];
+			assert_eq!(bond.expiration, 100);
+		})
 	}
 
 	// ------------------------------------------------------------
@@ -630,4 +738,7 @@ mod tests {
 			.max_tests(10)
 			.quickcheck(property as fn(Vec<u64>, u64) -> TestResult)
 	}
+
+	// ------------------------------------------------------------
+	// expand and contract tests
 }
