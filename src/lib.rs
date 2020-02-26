@@ -415,13 +415,13 @@ mod tests {
 	use std::sync::atomic::{AtomicU64, Ordering};
 
 	use frame_support::{assert_ok, impl_outer_origin, parameter_types, weights::Weight};
-	use system;
 	use sp_core::H256;
 	use sp_runtime::{
 		testing::Header,
 		traits::{BlakeTwo256, IdentityLookup},
 		Perbill,
 	};
+	use system;
 
 	impl_outer_origin! {
 		pub enum Origin for Test {}
@@ -618,7 +618,11 @@ mod tests {
 			// set blocknumber past expiration time
 			System::set_block_number(ExpirationPeriod::get() + 20);
 			assert_ok!(Stablecoin::contract_supply(42));
-			assert_eq!(prev_supply, Stablecoin::coin_supply(), "coin supply should not change as the bond expired");
+			assert_eq!(
+				prev_supply,
+				Stablecoin::coin_supply(),
+				"coin supply should not change as the bond expired"
+			);
 		});
 	}
 
@@ -783,29 +787,26 @@ mod tests {
 				.unwrap();
 			Stablecoin::add_bid(Bid::new(1, Perbill::from_percent(80), bond_amount));
 			Stablecoin::add_bid(Bid::new(2, Perbill::from_percent(75), 2 * BASE_UNIT));
-			log::debug!("bids before: {:?}", Stablecoin::bond_bids());
-			log::debug!("bonds before: {:?}", Stablecoin::bonds());
-			
+
 			let prev_supply = Stablecoin::coin_supply();
 			let amount = 2 * BASE_UNIT;
-			log::debug!("----- contract supply -----");
 			assert_ok!(Stablecoin::contract_supply(amount));
 
 			let bids = Stablecoin::bond_bids();
 			let bonds = Stablecoin::bonds();
-			log::debug!("bids after: {:?}", bids);
-			log::debug!("bonds after: {:?}", bonds);
-			assert_eq!(bids.len(), 1, "exactly one bond should have been removed");
-			let remainging_bid_quantity = Ratio::new(667, 1_000)
-				.checked_mul(&mut BASE_UNIT.into())
-				.map(|r| r.to_integer())
-				.unwrap();
+			assert_eq!(bids.len(), 1, "exactly one bid should have been removed");
+			let remainging_bid_quantity = Fixed64::from_rational(667, 1_000)
+				.saturated_multiply_accumulate(BASE_UNIT)
+				.saturating_sub(BASE_UNIT);
 			assert_eq!(
 				bids[0],
 				Bid::new(2, Perbill::from_percent(75), remainging_bid_quantity)
 			);
 			assert_eq!(bonds[0].payout, bond_amount);
-			assert_eq!(bonds[1].payout, Fixed64::from_rational(333, 1000).saturated_multiply_accumulate(BASE_UNIT));
+			assert_eq!(
+				bonds[1].payout,
+				Fixed64::from_rational(333, 1_000).saturated_multiply_accumulate(BASE_UNIT)
+			);
 
 			assert_eq!(
 				Stablecoin::coin_supply(),
