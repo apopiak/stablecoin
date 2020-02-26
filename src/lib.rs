@@ -9,7 +9,7 @@ use frame_support::{
 	decl_error, decl_event, decl_module, decl_storage,
 	dispatch::{DispatchError, DispatchResult},
 	ensure,
-	traits::{Currency, Get},
+	traits::Get,
 };
 use num_rational::Ratio;
 use sp_runtime::{traits::CheckedMul, Fixed64, PerThing, Perbill};
@@ -63,6 +63,10 @@ pub struct Bid<AccountId> {
 	quantity: Coins,
 }
 
+pub enum BidError {
+	Overflow,
+}
+
 impl<AccountId> Bid<AccountId> {
 	fn new(account: AccountId, price: Perbill, quantity: Coins) -> Bid<AccountId> {
 		let price_in_coins = price * quantity;
@@ -72,6 +76,18 @@ impl<AccountId> Bid<AccountId> {
 			price_in_coins,
 			quantity,
 		}
+	}
+
+	fn remove_coins(&mut self, coins: Coins) -> Result<Coins, BidError> {
+		let inverse_price: Ratio<u64> = Ratio::new(Perbill::ACCURACY.into(), self.price.deconstruct().into());
+		// should never overflow, but better safe than sorry
+		let removed_quantity = inverse_price
+			.checked_mul(&mut coins.into())
+			.map(|r| r.to_integer())
+			.ok_or(BidError::Overflow)?;
+		self.price_in_coins -= coins;
+		self.quantity -= removed_quantity;
+		Ok(removed_quantity)
 	}
 }
 
@@ -107,6 +123,14 @@ decl_error! {
 		InsufficientBalance,
 		CoinOverflow,
 		CoinUnderflow,
+	}
+}
+
+impl<T: Trait> From<BidError> for Error<T> {
+	fn from(e: BidError) -> Self {
+		match e {
+			BidError::Overflow => Error::CoinOverflow,
+		}
 	}
 }
 
@@ -166,7 +190,7 @@ decl_module! {
 			<Shares<T>>::put(shares);
 			<ShareSupply>::put(len as u64);
 
-			Self::hand_out_coins_to_shareholders(COIN_SUPPLY);
+			Self::hand_out_coins_to_shareholders(COIN_SUPPLY)?;
 
 			<Init>::put(true);
 
@@ -290,23 +314,26 @@ impl<T: Trait> Module<T> {
 		let mut remaining = amount;
 		while remaining > 0 && bids.len() > 0 {
 			let mut bid = bids.remove(0);
-			if bid.quantity >= remaining {
-				Self::add_bond(bid.account.clone(), remaining);
-				bid.quantity -= remaining;
-				bid.price_in_coins -= bid.price * remaining;
+			if bid.price_in_coins >= remaining {
+				let removed_quantity = bid.remove_coins(remaining).map_err(|e| Error::<T>::from(e))?;
+				Self::add_bond(bid.account.clone(), removed_quantity);
 				// re-add bid with reduced amount
-				if bid.quantity > 0 {
+				if bid.price_in_coins > 0 && bid.quantity > 0 {
 					Self::_add_bid_to(bid, &mut bids);
 				}
 				remaining -= remaining;
 			} else {
 				let Bid {
-					account, quantity, ..
+					account,
+					price_in_coins,
+					quantity,
+					..
 				} = bid;
 				Self::add_bond(account, quantity);
-				remaining -= quantity;
+				remaining -= price_in_coins;
 			}
 		}
+		<BondBids<T>>::put(bids);
 		Ok(())
 	}
 
@@ -410,6 +437,7 @@ impl<T: Trait> Module<T> {
 mod tests {
 	use super::*;
 	use itertools::Itertools;
+	use log;
 	use more_asserts::*;
 	use quickcheck::{QuickCheck, TestResult};
 	use rand::{thread_rng, Rng};
@@ -428,7 +456,7 @@ mod tests {
 	}
 
 	static LAST_PRICE: AtomicU64 = AtomicU64::new(BASE_UNIT);
-	struct RandomPrice;
+	pub struct RandomPrice;
 
 	impl FetchPrice<Coins> for RandomPrice {
 		fn fetch_price() -> Coins {
@@ -593,8 +621,8 @@ mod tests {
 
 			let bonds = Stablecoin::bonds();
 			assert_eq!(bonds.len(), 1);
-			let bond = bonds[0];
-			assert_eq!(bond.expiration, 100);
+			let bond = &bonds[0];
+			assert_eq!(bond.expiration, 101);
 		})
 	}
 
@@ -612,7 +640,7 @@ mod tests {
 			assert_eq!(Stablecoin::get_balance(10), COIN_SUPPLY / 10);
 
 			let amount = 30 * BASE_UNIT;
-			Stablecoin::hand_out_coins_to_shareholders(amount);
+			assert_ok!(Stablecoin::hand_out_coins_to_shareholders(amount));
 
 			let amount_per_acc = 3 * BASE_UNIT;
 			assert_eq!(Stablecoin::get_balance(1), COIN_SUPPLY / 10 + amount_per_acc);
@@ -634,7 +662,7 @@ mod tests {
 			assert_eq!(Stablecoin::get_balance(10), COIN_SUPPLY / 10);
 
 			let amount = 8;
-			Stablecoin::hand_out_coins_to_shareholders(amount);
+			assert_ok!(Stablecoin::hand_out_coins_to_shareholders(amount));
 
 			let amount_per_acc = 1;
 			assert_eq!(Stablecoin::get_balance(1), COIN_SUPPLY / 10 + amount_per_acc);
@@ -658,7 +686,7 @@ mod tests {
 			assert_eq!(Stablecoin::get_balance(10), COIN_SUPPLY / 10);
 
 			let amount = 13;
-			Stablecoin::hand_out_coins_to_shareholders(amount);
+			assert_ok!(Stablecoin::hand_out_coins_to_shareholders(amount));
 
 			let amount_per_acc = 1;
 			assert_eq!(Stablecoin::get_balance(1), COIN_SUPPLY / 10 + amount_per_acc + 1);
@@ -698,7 +726,7 @@ mod tests {
 				));
 
 				let amount = amount;
-				Stablecoin::hand_out_coins_to_shareholders(amount);
+				assert_ok!(Stablecoin::hand_out_coins_to_shareholders(amount));
 
 				let len = len as u64;
 				let payout = amount;
@@ -724,11 +752,10 @@ mod tests {
 				Origin::signed(1),
 				vec![1, 2, 3, 4, 5, 6, 7, 8, 9, 10]
 			));
-			assert_eq!(Stablecoin::get_balance(1), COIN_SUPPLY / 10);
-			assert_eq!(Stablecoin::get_balance(10), COIN_SUPPLY / 10);
 
+			let prev_supply = Stablecoin::coin_supply();
 			let amount = 13;
-			Stablecoin::expand_supply(amount);
+			assert_ok!(Stablecoin::expand_supply(amount));
 
 			let amount_per_acc = 1;
 			assert_eq!(Stablecoin::get_balance(1), COIN_SUPPLY / 10 + amount_per_acc + 1);
@@ -737,6 +764,58 @@ mod tests {
 			assert_eq!(Stablecoin::get_balance(4), COIN_SUPPLY / 10 + amount_per_acc);
 			assert_eq!(Stablecoin::get_balance(8), COIN_SUPPLY / 10 + amount_per_acc);
 			assert_eq!(Stablecoin::get_balance(10), COIN_SUPPLY / 10 + amount_per_acc);
+
+			assert_eq!(
+				Stablecoin::coin_supply(),
+				prev_supply + amount,
+				"supply should be increased by amount"
+			);
 		});
+	}
+
+	#[test]
+	fn contract_supply_test() {
+		new_test_ext().execute_with(|| {
+			assert_ok!(Stablecoin::init_with_shareholders(
+				Origin::signed(1),
+				vec![1, 2, 3, 4, 5, 6, 7, 8, 9, 10]
+			));
+
+			let bond_amount = Ratio::new(125, 100)
+				.checked_mul(&mut BASE_UNIT.into())
+				.map(|r| r.to_integer())
+				.unwrap();
+			Stablecoin::add_bid(Bid::new(1, Perbill::from_percent(80), bond_amount));
+			Stablecoin::add_bid(Bid::new(2, Perbill::from_percent(75), 2 * BASE_UNIT));
+			log::debug!("bids before: {:?}", Stablecoin::bond_bids());
+			log::debug!("bonds before: {:?}", Stablecoin::bonds());
+
+			let prev_supply = Stablecoin::coin_supply();
+			let amount = 2 * BASE_UNIT;
+			assert_ok!(Stablecoin::contract_supply(amount));
+			log::debug!("----- contract supply -----");
+
+			let bids = Stablecoin::bond_bids();
+			let bonds = Stablecoin::bonds();
+			log::debug!("bids after: {:?}", bids);
+			log::debug!("bonds after: {:?}", bonds);
+			assert_eq!(bids.len(), 1, "exactly one bond should have been removed");
+			let remainging_bid_quantity = Ratio::new(666_666_666, 1_000_000_000)
+				.checked_mul(&mut BASE_UNIT.into())
+				.map(|r| r.to_integer())
+				.unwrap();
+			assert_eq!(
+				bids[0],
+				Bid::new(2, Perbill::from_percent(75), remainging_bid_quantity)
+			);
+			assert_eq!(bonds[0].payout, BASE_UNIT);
+			assert_eq!(bonds[1].payout, BASE_UNIT);
+
+			assert_eq!(
+				Stablecoin::coin_supply(),
+				prev_supply - amount,
+				"supply should be decreased by amount"
+			);
+		})
 	}
 }
