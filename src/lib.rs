@@ -107,6 +107,7 @@ decl_error! {
 		InsufficientBalance,
 		CoinOverflow,
 		CoinUnderflow,
+		ZeroPrice,
 	}
 }
 
@@ -222,7 +223,9 @@ decl_module! {
 
 		fn on_initialize(_n: T::BlockNumber) {
 			let price = T::CoinPrice::fetch_price();
-			Self::expand_or_contract_on_price(price);
+			Self::expand_or_contract_on_price(price).unwrap_or_else(|e| {
+				native::error!("could not adjust supply: {:?}", e);
+			});
 		}
 	}
 }
@@ -245,28 +248,25 @@ impl<T: Trait> Module<T> {
 		bids.truncate(T::MaximumBids::get());
 	}
 
-	fn expand_or_contract_on_price(price: Coins) {
+	fn expand_or_contract_on_price(price: Coins) -> DispatchResult {
 		if price == 0 {
 			native::error!("coin price is zero!");
-			return;
+			return Err(DispatchError::from(Error::<T>::ZeroPrice));
 		}
 		if price > BASE_UNIT {
 			let ratio = Ratio::new(price, BASE_UNIT);
 			let supply = Self::coin_supply();
 			let contract_by = (ratio * supply - supply).to_integer();
-			Self::contract_supply(contract_by).unwrap_or_else(|e| {
-				native::error!("could not expand supply: {:?}", e);
-			});
+			Self::contract_supply(contract_by)?;
 		} else if price < BASE_UNIT {
 			let ratio = Ratio::new(BASE_UNIT, price);
 			let supply = Self::coin_supply();
 			let expand_by = (ratio * supply - supply).to_integer();
-			Self::expand_supply(expand_by).unwrap_or_else(|e| {
-				native::error!("could not expand supply: {:?}", e);
-			});
+			Self::expand_supply(expand_by)?;
 		} else {
-			native::info!("coin price is equal to base as it should be");
+			native::info!("coin price is equal to base as is desired --> nothing to do");
 		}
+		Ok(())
 	}
 
 	fn test_decrease_coin_supply(amount: Coins) -> DispatchResult {
@@ -824,5 +824,30 @@ mod tests {
 				"supply should be decreased by amount"
 			);
 		})
+	}
+
+	#[test]
+	fn expand_or_contract_quickcheck() {
+		fn property(price: Coins) -> TestResult {
+			new_test_ext().execute_with(|| {
+				if price == 0 {
+					return TestResult::discard();
+				}
+
+				assert_ok!(Stablecoin::init_with_shareholders(
+					Origin::signed(1),
+					vec![1, 2, 3, 4, 5, 6, 7, 8, 9, 10]
+				));
+
+				let price = price;
+				assert_ok!(Stablecoin::expand_or_contract_on_price(price));
+
+				TestResult::passed()
+			})
+		}
+
+		QuickCheck::new()
+			.max_tests(10)
+			.quickcheck(property as fn(u64) -> TestResult)
 	}
 }
