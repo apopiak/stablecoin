@@ -339,9 +339,11 @@ impl<T: Trait> Module<T> {
 					bond.payout -= remaining;
 					<Balance<T>>::mutate(&bond.account, |b| *b += remaining);
 					remaining = 0;
+					continue;
 				}
+			}
 			// bond does not cover the remaining amount --> resolve and continue
-			} else if let Some(bond) = bonds.pop_front() {
+			if let Some(bond) = bonds.pop_front() {
 				assert!(
 					bond.payout <= remaining,
 					"payout should be less than the remaining amount"
@@ -753,17 +755,25 @@ mod tests {
 				vec![1, 2, 3, 4, 5, 6, 7, 8, 9, 10]
 			));
 
+			// payout of 120% of BASE_UNIT
+			let payout = Fixed64::from_rational(20, 100).saturated_multiply_accumulate(BASE_UNIT);
+			Stablecoin::add_bond(2, payout);
+			Stablecoin::add_bond(3, payout);
+			Stablecoin::add_bond(4, payout);
+			Stablecoin::add_bond(5, 7 * payout);
+
 			let prev_supply = Stablecoin::coin_supply();
-			let amount = 13;
+			let amount = 13 * BASE_UNIT;
 			assert_ok!(Stablecoin::expand_supply(amount));
 
-			let amount_per_acc = 1;
-			assert_eq!(Stablecoin::get_balance(1), COIN_SUPPLY / 10 + amount_per_acc + 1);
-			assert_eq!(Stablecoin::get_balance(2), COIN_SUPPLY / 10 + amount_per_acc + 1);
-			assert_eq!(Stablecoin::get_balance(3), COIN_SUPPLY / 10 + amount_per_acc + 1);
-			assert_eq!(Stablecoin::get_balance(4), COIN_SUPPLY / 10 + amount_per_acc);
-			assert_eq!(Stablecoin::get_balance(8), COIN_SUPPLY / 10 + amount_per_acc);
-			assert_eq!(Stablecoin::get_balance(10), COIN_SUPPLY / 10 + amount_per_acc);
+			let amount_per_acc = COIN_SUPPLY / 10 + BASE_UNIT / 10;
+			assert_eq!(Stablecoin::get_balance(1), amount_per_acc);
+			assert_eq!(Stablecoin::get_balance(2), amount_per_acc + payout);
+			assert_eq!(Stablecoin::get_balance(3), amount_per_acc + payout);
+			assert_eq!(Stablecoin::get_balance(4), amount_per_acc + payout);
+			assert_eq!(Stablecoin::get_balance(5), amount_per_acc + 7 * payout);
+			assert_eq!(Stablecoin::get_balance(8), amount_per_acc);
+			assert_eq!(Stablecoin::get_balance(10), amount_per_acc);
 
 			assert_eq!(
 				Stablecoin::coin_supply(),
