@@ -1534,6 +1534,7 @@ dependencies = [
  "sp-io",
  "sp-runtime",
  "sp-std",
+ "static_assertions",
 ]
 
 [[package]]
