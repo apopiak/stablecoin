@@ -128,7 +128,7 @@ decl_error! {
 		ZeroPrice,
 		GenericOverflow,
 		GenericUnderflow,
-		Unexpected,
+		RoundingError,
 	}
 }
 
@@ -339,7 +339,7 @@ impl<T: Trait> Module<T> {
 					Self::_add_bid_to(bid, &mut bids);
 				} else if bid.price_in_coins != bid.quantity {
 					// if one of them is zero, both should be
-					return Err(DispatchError::from(Error::<T>::Unexpected));
+					return Err(DispatchError::from(Error::<T>::RoundingError));
 				}
 				remaining -= remaining;
 			} else {
