@@ -116,7 +116,12 @@ decl_event!(
 	{
 		Initialized(AccountId),
 		Transfer(AccountId, AccountId, u64),
-		BondReleased(AccountId, u64),
+		NewBond(AccountId, u64),
+		BondFulfilled(AccountId, u64),
+		BondExpired(AccountId, u64),
+		NewBid(AccountId, Perbill, u64),
+		CancelledBidsBelow(AccountId, Perbill),
+		CancelledBids(AccountId),
 	}
 );
 
@@ -252,12 +257,34 @@ decl_module! {
 			// to be between `MINIMUM_BOND_PRICE` and 1
 			let price_in_coins = price * quantity;
 			<Balance<T>>::try_mutate(&who, |b| -> DispatchResult { b.checked_sub(price_in_coins).ok_or(Error::<T>::InsufficientBalance)?; Ok(()) })?;
-			Self::add_bid(Bid::new(who, price, quantity));
+			Self::add_bid(Bid::new(who.clone(), price, quantity));
+
+			Self::deposit_event(RawEvent::NewBid(who, price, quantity));
 
 			Ok(())
 		}
 
-		// TODO: implement cancelling bids
+		/// cancel all bids at or below `price` of the sender
+		pub fn cancel_bids_at_or_below(origin, price: Perbill) -> DispatchResult {
+			let who = ensure_signed(origin)?;
+
+			Self::cancel_bids(|bid| bid.account == who && bid.price <= price);
+
+			Self::deposit_event(RawEvent::CancelledBidsBelow(who, price));
+
+			Ok(())
+		}
+
+		/// cancel all bids belonging to the sender
+		pub fn cancel_all_bids(origin) -> DispatchResult {
+			let who = ensure_signed(origin)?;
+
+			Self::cancel_bids(|bid| bid.account == who);
+
+			Self::deposit_event(RawEvent::CancelledBids(who));
+
+			Ok(())
+		}
 
 		fn on_initialize(_n: T::BlockNumber) {
 			Self::_on_block().unwrap_or_else(|e| {
@@ -283,6 +310,14 @@ impl<T: Trait> Module<T> {
 			.unwrap_or_else(|i| i);
 		bids.insert(index, bid);
 		bids.truncate(T::MaximumBids::get());
+	}
+
+	fn cancel_bids<F>(cancel_for: F) where F: Fn(&Bid<T::AccountId>) -> bool {
+		let mut bids = Self::bond_bids();
+
+		bids.retain(|b| !cancel_for(b));
+
+		<BondBids<T>>::put(bids);
 	}
 
 	fn expand_or_contract_on_price(price: Coins) -> DispatchResult {
@@ -657,6 +692,55 @@ mod tests {
 	}
 
 	#[test]
+	fn cancel_all_bids_test() {
+		new_test_ext().execute_with(|| {
+			assert_ok!(Stablecoin::init(Origin::signed(1)));
+
+			Stablecoin::add_bid(Bid::new(1, Perbill::from_percent(25), 5 * BASE_UNIT));
+			Stablecoin::add_bid(Bid::new(2, Perbill::from_percent(33), 5 * BASE_UNIT));
+			Stablecoin::add_bid(Bid::new(1, Perbill::from_percent(50), 5 * BASE_UNIT));
+			Stablecoin::add_bid(Bid::new(3, Perbill::from_percent(50), 5 * BASE_UNIT));
+			assert_eq!(Stablecoin::bond_bids().len(), 4);
+
+			assert_ok!(Stablecoin::cancel_all_bids(Origin::signed(1)));
+
+			let bids = Stablecoin::bond_bids();
+			assert_eq!(bids.len(), 2);
+			for bid in bids {
+				assert!(bid.account != 1);
+			}
+		});
+	}
+
+	#[test]
+	fn cancel_selected_bids_test() {
+		new_test_ext().execute_with(|| {
+			assert_ok!(Stablecoin::init(Origin::signed(1)));
+
+			Stablecoin::add_bid(Bid::new(1, Perbill::from_percent(25), 5 * BASE_UNIT));
+			Stablecoin::add_bid(Bid::new(2, Perbill::from_percent(33), 5 * BASE_UNIT));
+			Stablecoin::add_bid(Bid::new(1, Perbill::from_percent(45), 5 * BASE_UNIT));
+			Stablecoin::add_bid(Bid::new(1, Perbill::from_percent(50), 5 * BASE_UNIT));
+			Stablecoin::add_bid(Bid::new(3, Perbill::from_percent(55), 5 * BASE_UNIT));
+			assert_eq!(Stablecoin::bond_bids().len(), 5);
+
+			assert_ok!(Stablecoin::cancel_bids_at_or_below(Origin::signed(1), Perbill::from_percent(45)));
+
+			let bids = Stablecoin::bond_bids();
+			assert_eq!(bids.len(), 3);
+			let bids: Vec<(_,_)> = bids.into_iter().map(|Bid { account, price, .. }| (account, price)).collect();
+			assert_eq!(
+				bids,
+				vec![
+					(3, Perbill::from_percent(55)),
+					(1, Perbill::from_percent(50)),
+					(2, Perbill::from_percent(33)),
+				]
+			);
+		});
+	}
+
+	#[test]
 	fn adding_bonds() {
 		new_test_ext().execute_with(|| {
 			assert_ok!(Stablecoin::init(Origin::signed(1)));
@@ -960,8 +1044,6 @@ mod tests {
 						log::error!("could not adjust supply: {:?}", e);
 					});
 				}
-
-				assert!(false);
 			})
 	}
 }
