@@ -113,16 +113,19 @@ decl_event!(
 	pub enum Event<T>
 	where
 		AccountId = <T as system::Trait>::AccountId,
+		BlockNumber = <T as system::Trait>::BlockNumber,
 	{
 		Initialized(AccountId),
 		Transfer(AccountId, AccountId, u64),
-		NewBond(AccountId, u64),
+		NewBid(AccountId, Perbill, u64),
+		NewBond(AccountId, u64, BlockNumber),
 		BondFulfilled(AccountId, u64),
 		BondPartiallyFulfilled(AccountId, u64),
 		BondExpired(AccountId, u64),
-		NewBid(AccountId, Perbill, u64),
 		CancelledBidsBelow(AccountId, Perbill),
 		CancelledBids(AccountId),
+		ExpandedSupply(u64),
+		ContractedSupply(u64),
 	}
 );
 
@@ -398,13 +401,14 @@ impl<T: Trait> Module<T> {
 			.checked_sub(burned)
 			.ok_or(Error::<T>::GenericUnderflow)?;
 		for bond in new_bonds.iter() {
-			Self::deposit_event(RawEvent::NewBond(bond.account.clone(), bond.payout));
+			Self::deposit_event(RawEvent::NewBond(bond.account.clone(), bond.payout, bond.expiration));
 		}
 		let mut bonds = Self::bonds();
 		bonds.append(&mut new_bonds);
 		<Bonds<T>>::put(bonds);
 		<CoinSupply>::put(new_supply);
 		<BondBids<T>>::put(bids);
+		Self::deposit_event(RawEvent::ContractedSupply(burned));
 		Ok(())
 	}
 
@@ -476,6 +480,7 @@ impl<T: Trait> Module<T> {
 		if remaining > 0 {
 			Self::hand_out_coins_to_shareholders(remaining)?;
 		}
+		Self::deposit_event(RawEvent::ExpandedSupply(amount));
 		Ok(())
 	}
 
