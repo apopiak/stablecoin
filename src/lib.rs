@@ -118,6 +118,7 @@ decl_event!(
 		Transfer(AccountId, AccountId, u64),
 		NewBond(AccountId, u64),
 		BondFulfilled(AccountId, u64),
+		BondPartiallyFulfilled(AccountId, u64),
 		BondExpired(AccountId, u64),
 		NewBid(AccountId, Perbill, u64),
 		CancelledBidsBelow(AccountId, Perbill),
@@ -393,6 +394,9 @@ impl<T: Trait> Module<T> {
 		let new_supply = <CoinSupply>::get()
 			.checked_sub(burned)
 			.ok_or(Error::<T>::GenericUnderflow)?;
+		for bond in new_bonds.iter() {
+			Self::deposit_event(RawEvent::NewBond(bond.account.clone(), bond.payout));
+		}
 		let mut bonds = Self::bonds();
 		bonds.append(&mut new_bonds);
 		<Bonds<T>>::put(bonds);
@@ -422,8 +426,9 @@ impl<T: Trait> Module<T> {
 		let mut remaining = amount;
 		while remaining > 0 && bonds.len() > 0 {
 			// bond has expired --> discard
-			if let Some(Bond { expiration, .. }) = bonds.front() {
+			if let Some(Bond { account, payout, expiration, .. }) = bonds.front() {
 				if <system::Module<T>>::block_number() >= *expiration {
+					Self::deposit_event(RawEvent::BondExpired(account.clone(), *payout));
 					bonds.pop_front();
 					continue;
 				}
@@ -434,6 +439,7 @@ impl<T: Trait> Module<T> {
 					// safe because `payout` is checked to be greater than `remaining`
 					bond.payout -= remaining;
 					<Balance<T>>::mutate(&bond.account, |b| *b += remaining);
+					Self::deposit_event(RawEvent::BondPartiallyFulfilled(bond.account.clone(), bond.payout));
 					remaining = 0;
 					continue;
 				}
@@ -445,6 +451,7 @@ impl<T: Trait> Module<T> {
 					"payout should be less than or equal to the remaining amount"
 				);
 				<Balance<T>>::mutate(&bond.account, |b| *b += bond.payout);
+				Self::deposit_event(RawEvent::BondFulfilled(bond.account, bond.payout));
 				// safe because `payout` is asserted to be less or equal to `remaining`
 				remaining -= bond.payout;
 			}
