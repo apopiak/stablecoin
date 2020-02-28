@@ -260,8 +260,7 @@ decl_module! {
 		// TODO: implement cancelling bids
 
 		fn on_initialize(_n: T::BlockNumber) {
-			let price = T::CoinPrice::fetch_price();
-			Self::expand_or_contract_on_price(price).unwrap_or_else(|e| {
+			Self::_on_block().unwrap_or_else(|e| {
 				native::error!("could not adjust supply: {:?}", e);
 			});
 		}
@@ -325,8 +324,8 @@ impl<T: Trait> Module<T> {
 	}
 
 	fn contract_supply(amount: Coins) -> DispatchResult {
-		let mut bids = Self::bond_bids();
 		Self::test_decrease_coin_supply(amount)?;
+		let mut bids = Self::bond_bids();
 		let mut remaining = amount;
 		let mut new_bonds = VecDeque::new();
 		while remaining > 0 && bids.len() > 0 {
@@ -353,8 +352,12 @@ impl<T: Trait> Module<T> {
 				remaining -= price_in_coins;
 			}
 		}
-		let burned = amount.checked_sub(remaining).ok_or(Error::<T>::GenericUnderflow)?;
-		let new_supply = <CoinSupply>::get().checked_sub(burned).ok_or(Error::<T>::GenericUnderflow)?;
+		let burned = amount
+			.checked_sub(remaining)
+			.ok_or(Error::<T>::GenericUnderflow)?;
+		let new_supply = <CoinSupply>::get()
+			.checked_sub(burned)
+			.ok_or(Error::<T>::GenericUnderflow)?;
 		let mut bonds = Self::bonds();
 		bonds.append(&mut new_bonds);
 		<Bonds<T>>::put(bonds);
@@ -379,8 +382,8 @@ impl<T: Trait> Module<T> {
 	}
 
 	fn expand_supply(amount: Coins) -> DispatchResult {
-		let mut bonds = Self::bonds();
 		Self::test_increase_coin_supply(amount)?;
+		let mut bonds = Self::bonds();
 		let mut remaining = amount;
 		while remaining > 0 && bonds.len() > 0 {
 			// bond has expired --> discard
@@ -393,6 +396,7 @@ impl<T: Trait> Module<T> {
 			// bond covers the remaining amount --> update and finish up
 			if let Some(bond) = bonds.front_mut() {
 				if bond.payout > remaining {
+					// safe because `payout` is checked to be greater than `remaining`
 					bond.payout -= remaining;
 					<Balance<T>>::mutate(&bond.account, |b| *b += remaining);
 					remaining = 0;
@@ -401,14 +405,16 @@ impl<T: Trait> Module<T> {
 			}
 			// bond does not cover the remaining amount --> resolve and continue
 			if let Some(bond) = bonds.pop_front() {
-				assert!(
+				debug_assert!(
 					bond.payout <= remaining,
-					"payout should be less than the remaining amount"
+					"payout should be less than or equal to the remaining amount"
 				);
 				<Balance<T>>::mutate(&bond.account, |b| *b += bond.payout);
+				// safe because `payout` is asserted to be less or equal to `remaining`
 				remaining -= bond.payout;
 			}
 		}
+		// safe to do this late because of the test in the first line of the function
 		Self::try_increase_coin_supply(amount - remaining)?;
 		<Bonds<T>>::put(bonds);
 		if remaining > 0 {
@@ -430,6 +436,9 @@ impl<T: Trait> Module<T> {
 		Ok(())
 	}
 
+	// will hand out coins to shareholders according to their number of shares
+	// will hand out more coins to shareholders at the beginning of the list
+	// if the handout cannot be equal
 	fn hand_out_coins_to_shareholders(amount: Coins) -> DispatchResult {
 		let supply = Self::share_supply();
 		let shares = Self::shares();
@@ -446,7 +455,7 @@ impl<T: Trait> Module<T> {
 			let is_in_first_mod_len = (i as u64) < amount % len;
 			let extra_payout = if pay_extra && is_in_first_mod_len { 1 } else { 0 };
 			let payout = min(max_payout, num_shares * coins_per_share + extra_payout);
-			assert!(
+			debug_assert!(
 				amount_payed + payout <= amount,
 				"amount payed out should be less or equal target amount"
 			);
@@ -454,11 +463,16 @@ impl<T: Trait> Module<T> {
 			<Balance<T>>::insert(&acc, balance + payout);
 			amount_payed += payout;
 		}
-		assert!(
+		debug_assert!(
 			amount_payed == amount,
 			"amount payed out should equal target amount"
 		);
 		Ok(())
+	}
+
+	fn _on_block() -> DispatchResult {
+		let price = T::CoinPrice::fetch_price();
+		Self::expand_or_contract_on_price(price)
 	}
 }
 
@@ -498,7 +512,7 @@ mod tests {
 				.checked_mul(&mut prev.into())
 				.map(|r| r.to_integer())
 				.unwrap_or(prev);
-			LAST_PRICE.store(next, Ordering::SeqCst);
+			LAST_PRICE.store(next + 1, Ordering::SeqCst);
 			prev
 		}
 	}
@@ -785,6 +799,9 @@ mod tests {
 				));
 
 				let amount = amount;
+				// this assert might actually produce a false positive
+				// as there might be errors returned that are the correct
+				// behavior for the given parameters
 				assert_ok!(Stablecoin::hand_out_coins_to_shareholders(amount));
 
 				let len = len as u64;
@@ -798,7 +815,9 @@ mod tests {
 		}
 
 		QuickCheck::new()
-			.max_tests(100)
+			.min_tests_passed(5)
+			.tests(50)
+			.max_tests(500)
 			.quickcheck(property as fn(Vec<u64>, u64) -> TestResult)
 	}
 
@@ -903,6 +922,9 @@ mod tests {
 				}
 
 				for price in prices {
+					// this assert might actually produce a false positive
+					// as there might be errors returned that are the correct
+					// behavior for the given parameters
 					assert_ok!(Stablecoin::expand_or_contract_on_price(price));
 				}
 
@@ -911,7 +933,35 @@ mod tests {
 		}
 
 		QuickCheck::new()
-			.max_tests(100)
+			.min_tests_passed(5)
+			.tests(50)
+			.max_tests(500)
 			.quickcheck(property as fn(Vec<(u64, u64)>, Vec<u64>) -> TestResult)
+	}
+
+	#[test]
+	fn expand_or_contract_smoketest() {
+			new_test_ext().execute_with(|| {
+				let mut rng = rand::thread_rng();
+
+    			let bonds: Vec<(u64, u64)> = (0..100).map(|_| (rng.gen_range(1, 200), rng.gen_range(1, 10 * BASE_UNIT))).collect();
+
+				assert_ok!(Stablecoin::init_with_shareholders(
+					Origin::signed(1),
+					vec![1, 2, 3, 4, 5, 6, 7, 8, 9, 10]
+				));
+
+				for (account, payout) in bonds {
+					Stablecoin::_add_bond(account, payout);
+				}
+
+				for _ in 0..150 {
+					Stablecoin::_on_block().unwrap_or_else(|e| {
+						log::error!("could not adjust supply: {:?}", e);
+					});
+				}
+
+				assert!(false);
+			})
 	}
 }
