@@ -1,6 +1,6 @@
 [package]
 name = "substrate-stablecoin"
-version = "0.0.1"
+version = "0.0.2"
 authors = ["apopiak"]
 edition = "2018"
 
@@ -17,8 +17,11 @@ std = [
 ]
 
 [dependencies]
-num-rational = "0.2"
 static_assertions = "1.1.0"
+
+[dependencies.num-rational]
+default-features = false
+version = "0.2"
 
 [dependencies.serde]
 features = ['derive']
@@ -34,33 +37,33 @@ version = '1.0.0'
 [dependencies.sp-runtime]
 default-features = false
 git = 'https://github.com/paritytech/substrate.git'
-rev = '7242c7e14e2f20e31a37032cf1066a5fb2f9f1c4'
-version = '2.0.0'
+rev = '7c751574d8c53108e78440bfa5dffb80ab644972'
+version = '2.0.0-alpha.1'
 
 [dependencies.frame-support]
 default-features = false
 git = 'https://github.com/paritytech/substrate.git'
-rev = '7242c7e14e2f20e31a37032cf1066a5fb2f9f1c4'
-version = '2.0.0'
+rev = '7c751574d8c53108e78440bfa5dffb80ab644972'
+version = '2.0.0-alpha.1'
 
 [dependencies.system]
 default-features = false
 git = 'https://github.com/paritytech/substrate.git'
 package = 'frame-system'
-rev = '7242c7e14e2f20e31a37032cf1066a5fb2f9f1c4'
-version = '2.0.0'
+rev = '7c751574d8c53108e78440bfa5dffb80ab644972'
+version = '2.0.0-alpha.1'
 
 [dependencies.sp-io]
 default-features = false
 git = 'https://github.com/paritytech/substrate.git'
-rev = '7242c7e14e2f20e31a37032cf1066a5fb2f9f1c4'
-version = '2.0.0'
+rev = '7c751574d8c53108e78440bfa5dffb80ab644972'
+version = '2.0.0-alpha.1'
 
 [dependencies.sp-std]
 default-features = false
 git = 'https://github.com/paritytech/substrate.git'
-rev = '7242c7e14e2f20e31a37032cf1066a5fb2f9f1c4'
-version = '2.0.0'
+rev = '7c751574d8c53108e78440bfa5dffb80ab644972'
+version = '2.0.0-alpha.1'
 
 [dev-dependencies]
 itertools = "0.8.2"
@@ -72,5 +75,5 @@ log = "0.4.8"
 [dev-dependencies.sp-core]
 default-features = false
 git = 'https://github.com/paritytech/substrate.git'
-rev = '7242c7e14e2f20e31a37032cf1066a5fb2f9f1c4'
-version = '2.0.0'
+rev = '7c751574d8c53108e78440bfa5dffb80ab644972'
+version = '2.0.0-alpha.1'
