@@ -27,7 +27,7 @@ use system::ensure_signed;
 
 /// Trait for getting a price.
 pub trait FetchPrice<Balance> {
-	/// Fetch the price.
+	/// Fetch the current price.
 	fn fetch_price() -> Balance;
 }
 
@@ -45,18 +45,22 @@ pub trait Trait: system::Trait {
 	type MaximumBids: Get<usize>;
 }
 
+/// The type used to represent the account balance for the stablecoin.
 pub type Coins = u64;
 
-// 1000 units are supposed to represent $1 USD or whatever is being tracked
+// 1000 units are supposed to represent $1 USD or whatever is being tracked.
 const BASE_UNIT: Coins = 1000;
 const COIN_SUPPLY: Coins = BASE_UNIT * 100;
 const SHARE_SUPPLY: u64 = 100;
 
-// The Basis whitepaper recommends 10% based on simulations
+// The Basis whitepaper recommends 10% based on simulations.
 const MINIMUM_BOND_PRICE: Perbill = Perbill::from_percent(10);
 const MINIMUM_BOND_PAYOUT: i64 = 1;
-const_assert!(MINIMUM_BOND_PAYOUT >= 1); // minimum bond amount is 1
+const_assert!(MINIMUM_BOND_PAYOUT >= 1); // minimum bond amount should be at least 1
 
+/// A bond representing (possible) future payout of coins.
+/// 
+/// Expires at block `expiration` so it will be discarded if payed out after that block.
 #[derive(Encode, Decode, Default, Clone, PartialEq, PartialOrd, Eq, Ord)]
 #[cfg_attr(feature = "std", derive(Debug))]
 pub struct Bond<AccountId, BlockNumber> {
@@ -65,6 +69,10 @@ pub struct Bond<AccountId, BlockNumber> {
 	expiration: BlockNumber,
 }
 
+/// A bid for a bond of the stablecoin at a certain price.
+/// 
+/// `price_in_coins` is the amount of coins burned
+/// `quantity` is the amount of coins gained on payout
 #[derive(Encode, Decode, Default, Clone, PartialEq)]
 #[cfg_attr(feature = "std", derive(Debug))]
 pub struct Bid<AccountId> {
@@ -81,6 +89,7 @@ pub enum BidError {
 
 impl<AccountId> Bid<AccountId> {
 	fn new(account: AccountId, price: Perbill, quantity: Coins) -> Bid<AccountId> {
+		// This is fine because Perbill has an implementation tuned for balance types.
 		let price_in_coins = price * quantity;
 		Bid {
 			account,
@@ -90,9 +99,11 @@ impl<AccountId> Bid<AccountId> {
 		}
 	}
 
+	/// Remove `coins` amount of coins from the bid, mirroring the changes in quantity
+	/// according to the price attached to the bid.
 	fn remove_coins(&mut self, coins: Coins) -> Result<Coins, BidError> {
 		let inverse_price: Ratio<u64> = Ratio::new(Perbill::ACCURACY.into(), self.price.deconstruct().into());
-		// should never overflow, but better safe than sorry
+		// Should never overflow, but better safe than sorry.
 		let removed_quantity = inverse_price
 			.checked_mul(&mut coins.into())
 			.map(|r| r.to_integer())
@@ -150,7 +161,7 @@ impl<T: Trait> From<BidError> for Error<T> {
 	}
 }
 
-// This pallet's storage items.bonds
+// This pallet's storage items.
 decl_storage! {
 	trait Store for Module<T: Trait> as Stablecoin {
 		Init get(fn initialized): bool = false;
@@ -164,7 +175,6 @@ decl_storage! {
 		// TODO: limit the maximum bond size
 		Bonds get(fn bonds): VecDeque<Bond<T::AccountId, T::BlockNumber>>;
 
-		// TODO: how to implement continuous auction/priority queue
 		BondBids get(fn bond_bids): Vec<Bid<T::AccountId>>;
 	}
 }
@@ -175,10 +185,10 @@ decl_module! {
 
 		fn deposit_event() = default;
 
-		/// initialize the coin
+		/// Initialize the stablecoin.
 		///
-		/// sender will be the founder
-		/// initial coin supply will be allocated to the founder
+		/// Sender of the transaction will be the founder.
+		/// Initial coin supply will be allocated to the founder.
 		pub fn init(origin) -> DispatchResult {
 			let founder = ensure_signed(origin)?;
 
@@ -197,10 +207,10 @@ decl_module! {
 			Ok(())
 		}
 
-		/// initialize the coin with the given `shareholders`
+		/// Initialize the coin with the given `shareholders`.
 		///
-		/// sender will be the founder
-		/// initial coin supply will be distributed evenly to the shareholders
+		/// Sender of the transaction will be the founder.
+		/// Initial coin supply will be distributed evenly to the shareholders.
 		pub fn init_with_shareholders(origin, shareholders: Vec<T::AccountId>) -> DispatchResult {
 			let founder = ensure_signed(origin)?;
 
@@ -221,7 +231,7 @@ decl_module! {
 			Ok(())
 		}
 
-		/// transfer `amount` coins from the sender to the account `to`
+		/// Transfer `amount` coins from the sender to the account `to`.
 		pub fn transfer(origin, to: T::AccountId, amount: u64) -> DispatchResult {
 			let sender = ensure_signed(origin)?;
 
@@ -240,7 +250,7 @@ decl_module! {
 			Ok(())
 		}
 
-		/// bid for `amount * BASE_UNIT` coins at a price of `price`
+		/// Bid for `amount * BASE_UNIT` coins at a price of `price`.
 		///
 		/// Example: `bid_for_bond(Perbill::from_percent(80), Fixed64::from_rational(125, 100))` will bid
 		/// for a bond with a payout of `1.25 * BASE_UNIT` coins for a price of `1 * BASE_UNIT` coins.
@@ -268,7 +278,7 @@ decl_module! {
 			Ok(())
 		}
 
-		/// cancel all bids at or below `price` of the sender
+		/// Cancel all bids at or below `price` of the sender.
 		pub fn cancel_bids_at_or_below(origin, price: Perbill) -> DispatchResult {
 			let who = ensure_signed(origin)?;
 
@@ -279,7 +289,7 @@ decl_module! {
 			Ok(())
 		}
 
-		/// cancel all bids belonging to the sender
+		/// Cancel all bids belonging to the sender.
 		pub fn cancel_all_bids(origin) -> DispatchResult {
 			let who = ensure_signed(origin)?;
 
@@ -290,6 +300,7 @@ decl_module! {
 			Ok(())
 		}
 
+		/// Adjusts the amount of coins according to the price.
 		fn on_initialize(_n: T::BlockNumber) {
 			Self::_on_block().unwrap_or_else(|e| {
 				native::error!("could not adjust supply: {:?}", e);
@@ -307,9 +318,11 @@ impl<T: Trait> Module<T> {
 		<BondBids<T>>::put(bids);
 	}
 
+	/// Add a bid to the queue, making sure to sort it from highest to lowest price.
+	/// Truncates the bids to `MaximumBids` to keep the queue bounded.
 	fn _add_bid_to(bid: Bid<T::AccountId>, bids: &mut Vec<Bid<T::AccountId>>) {
 		let index: usize = bids
-			// sort the bids from greatest to lowest
+			// sort the bids from highest to lowest
 			.binary_search_by(|&Bid { price, .. }| bid.price.cmp(&price))
 			.unwrap_or_else(|i| i);
 		bids.insert(index, bid);
@@ -327,6 +340,8 @@ impl<T: Trait> Module<T> {
 		<BondBids<T>>::put(bids);
 	}
 
+	/// Expands (if the price is too high) or contracts (if the price is too low)
+	/// the coin supply.
 	fn expand_or_contract_on_price(price: Coins) -> DispatchResult {
 		if price == 0 {
 			native::error!("coin price is zero!");
