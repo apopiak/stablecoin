@@ -47,6 +47,8 @@ pub trait Trait: system::Trait {
 	type ExpirationPeriod: Get<<Self as system::Trait>::BlockNumber>;
 	/// The maximum amount of bids allowed in the queue
 	type MaximumBids: Get<usize>;
+	/// How often adjustments should be made based on the price
+	type AdjustmentFrequency: Get<<Self as system::Trait>::BlockNumber>;
 }
 
 /// The type used to represent the account balance for the stablecoin.
@@ -280,7 +282,7 @@ decl_module! {
 			Ok(())
 		}
 
-		/// Cancel all bids at or below `price` of the sender.
+		/// Cancel all bids at or below `price` of the sender and refund the coins.
 		pub fn cancel_bids_at_or_below(origin, price: Perbill) -> DispatchResult {
 			let who = ensure_signed(origin)?;
 
@@ -291,7 +293,7 @@ decl_module! {
 			Ok(())
 		}
 
-		/// Cancel all bids belonging to the sender.
+		/// Cancel all bids belonging to the sender and refund the coins.
 		pub fn cancel_all_bids(origin) -> DispatchResult {
 			let who = ensure_signed(origin)?;
 
@@ -302,9 +304,10 @@ decl_module! {
 			Ok(())
 		}
 
-		/// Adjusts the amount of coins according to the price.
-		fn on_initialize(_n: T::BlockNumber) {
-			Self::_on_block().unwrap_or_else(|e| {
+		/// Adjust the amount of coins according to the price.
+		fn on_initialize(n: T::BlockNumber) {
+			let price = T::CoinPrice::fetch_price();
+			Self::on_block_with_price(n, price).unwrap_or_else(|e| {
 				native::error!("could not adjust supply: {:?}", e);
 			});
 		}
@@ -547,9 +550,9 @@ impl<T: Trait> Module<T> {
 		Ok(())
 	}
 
-	// will hand out coins to shareholders according to their number of shares
-	// will hand out more coins to shareholders at the beginning of the list
-	// if the handout cannot be equal
+	// Will hand out coins to shareholders according to their number of shares.
+	// Will hand out more coins to shareholders at the beginning of the list
+	// if the handout cannot be equal.
 	fn hand_out_coins_to_shareholders(amount: Coins) -> DispatchResult {
 		let supply = Self::share_supply();
 		let shares = Self::shares();
@@ -581,9 +584,13 @@ impl<T: Trait> Module<T> {
 		Ok(())
 	}
 
-	fn _on_block() -> DispatchResult {
-		let price = T::CoinPrice::fetch_price();
-		Self::expand_or_contract_on_price(price)
+	fn on_block_with_price(block: T::BlockNumber, price: Coins) -> DispatchResult {
+		// This can be changed to only correct for small or big price swings.
+		if block % T::AdjustmentFrequency::get() == 0.into() {
+			Self::expand_or_contract_on_price(price)
+		} else {
+			Ok(())
+		}
 	}
 }
 
@@ -644,6 +651,8 @@ mod tests {
 		pub const ExpirationPeriod: u64 = 100;
 		// allow few bids
 		pub const MaximumBids: usize = 10;
+		// adjust supply every second block
+		pub const AdjustmentFrequency: u64 = 2;
 	}
 
 	impl system::Trait for Test {
@@ -670,9 +679,10 @@ mod tests {
 
 	impl Trait for Test {
 		type Event = ();
+		type CoinPrice = RandomPrice;
 		type ExpirationPeriod = ExpirationPeriod;
 		type MaximumBids = MaximumBids;
-		type CoinPrice = RandomPrice;
+		type AdjustmentFrequency = AdjustmentFrequency;
 	}
 
 	type System = system::Module<Test>;
@@ -1139,7 +1149,8 @@ mod tests {
 			}
 
 			for _ in 0..150 {
-				Stablecoin::_on_block().unwrap_or_else(|e| {
+				let price = RandomPrice::fetch_price();
+				Stablecoin::on_block_with_price(0, price).unwrap_or_else(|e| {
 					log::error!("could not adjust supply: {:?}", e);
 				});
 			}
