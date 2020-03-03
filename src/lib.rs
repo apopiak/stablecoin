@@ -17,7 +17,7 @@ use frame_support::{
 };
 use num_rational::Ratio;
 use sp_runtime::{
-	traits::{CheckedMul, Saturating},
+	traits::CheckedMul,
 	Fixed64, PerThing, Perbill,
 };
 use sp_std::collections::vec_deque::VecDeque;
@@ -36,12 +36,13 @@ pub trait Trait: system::Trait {
 	/// The overarching event type.
 	type Event: From<Event<Self>> + Into<<Self as system::Trait>::Event>;
 
-	/// The amount of coins necessary to buy the tracked value
+	/// The amount of coins necessary to buy the tracked value.
 	type CoinPrice: FetchPrice<Coins>;
 
-	/// The expiration time of a bond
+	/// The expiration time of a bond.
 	type ExpirationPeriod: Get<<Self as system::Trait>::BlockNumber>;
-	/// The maximum amount of bids allowed in the queue
+
+	/// The maximum amount of bids allowed in the queue. Used to prevent the queue from growing forever.
 	type MaximumBids: Get<usize>;
 }
 
@@ -50,11 +51,17 @@ pub type Coins = u64;
 
 // 1000 units are supposed to represent $1 USD or whatever is being tracked.
 const BASE_UNIT: Coins = 1000;
+
+// Total supply of coins. Set to 100 coins (100$ USD here).
 const COIN_SUPPLY: Coins = BASE_UNIT * 100;
+
+// Number of Share tokens, fixed at genesis.
 const SHARE_SUPPLY: u64 = 100;
 
 // The Basis whitepaper recommends 10% based on simulations.
 const MINIMUM_BOND_PRICE: Perbill = Perbill::from_percent(10);
+
+// Number of coins that a bond will be redeemed for.
 const MINIMUM_BOND_PAYOUT: i64 = 1;
 const_assert!(MINIMUM_BOND_PAYOUT >= 1); // minimum bond amount should be at least 1
 
@@ -71,8 +78,8 @@ pub struct Bond<AccountId, BlockNumber> {
 
 /// A bid for a bond of the stablecoin at a certain price.
 /// 
-/// `price_in_coins` is the amount of coins burned
-/// `quantity` is the amount of coins gained on payout
+/// `price_in_coins` is the amount of coins burned.
+/// `quantity` is the amount of coins gained on payout.
 #[derive(Encode, Decode, Default, Clone, PartialEq)]
 #[cfg_attr(feature = "std", derive(Debug))]
 pub struct Bid<AccountId> {
@@ -102,6 +109,7 @@ impl<AccountId> Bid<AccountId> {
 	/// Remove `coins` amount of coins from the bid, mirroring the changes in quantity
 	/// according to the price attached to the bid.
 	fn remove_coins(&mut self, coins: Coins) -> Result<Coins, BidError> {
+		// SCOTT explain this
 		let inverse_price: Ratio<u64> = Ratio::new(Perbill::ACCURACY.into(), self.price.deconstruct().into());
 		// Should never overflow, but better safe than sorry.
 		let removed_quantity = inverse_price
@@ -252,7 +260,7 @@ decl_module! {
 
 		/// Bid for `amount * BASE_UNIT` coins at a price of `price`.
 		///
-		/// Example: `bid_for_bond(Perbill::from_percent(80), Fixed64::from_rational(125, 100))` will bid
+		/// Example: `bid_for_bond(origin, Perbill::from_percent(80), Fixed64::from_rational(125, 100))` will bid
 		/// for a bond with a payout of `1.25 * BASE_UNIT` coins for a price of `1 * BASE_UNIT` coins.
 		pub fn bid_for_bond(origin, price: Perbill, payout: Fixed64) -> DispatchResult {
 			let who = ensure_signed(origin)?;
@@ -320,6 +328,9 @@ impl<T: Trait> Module<T> {
 
 	/// Add a bid to the queue, making sure to sort it from highest to lowest price.
 	/// Truncates the bids to `MaximumBids` to keep the queue bounded.
+	// TODO: use priority queue (binaryheap?)
+	// TODO: be careful with malicious actor who would constantly bid an amount equal
+	//		 to the last bid in the queue and evict people on purpose.
 	fn _add_bid_to(bid: Bid<T::AccountId>, bids: &mut Vec<Bid<T::AccountId>>) {
 		let index: usize = bids
 			// sort the bids from highest to lowest
@@ -340,8 +351,7 @@ impl<T: Trait> Module<T> {
 		<BondBids<T>>::put(bids);
 	}
 
-	/// Expands (if the price is too high) or contracts (if the price is too low)
-	/// the coin supply.
+	/// Expands (if the price is too high) or contracts (if the price is too low) the coin supply.
 	fn expand_or_contract_on_price(price: Coins) -> DispatchResult {
 		if price == 0 {
 			native::error!("coin price is zero!");
@@ -397,7 +407,7 @@ impl<T: Trait> Module<T> {
 					// if one of them is zero, both should be
 					return Err(DispatchError::from(Error::<T>::RoundingError));
 				}
-				remaining -= remaining;
+				remaining -= remaining; // SCOTT
 			} else {
 				let Bid {
 					account,
@@ -499,6 +509,7 @@ impl<T: Trait> Module<T> {
 		Ok(())
 	}
 
+	// SCOTT document the difference between this one and the one just down below
 	fn test_increase_coin_supply(amount: Coins) -> DispatchResult {
 		let coin_supply = Self::coin_supply();
 		coin_supply.checked_add(amount).ok_or(Error::<T>::CoinOverflow)?;
@@ -512,9 +523,9 @@ impl<T: Trait> Module<T> {
 		Ok(())
 	}
 
-	// will hand out coins to shareholders according to their number of shares
-	// will hand out more coins to shareholders at the beginning of the list
-	// if the handout cannot be equal
+	// Will hand out coins to shareholders according to their number of shares.
+	// Will hand out more coins to shareholders at the beginning of the list
+	// if the handout cannot be equal.
 	fn hand_out_coins_to_shareholders(amount: Coins) -> DispatchResult {
 		let supply = Self::share_supply();
 		let shares = Self::shares();
@@ -630,7 +641,7 @@ mod tests {
 		type ModuleToIndex = ();
 		type AccountData = ();
 		type OnNewAccount = ();
-		type OnReapAccount = ();
+		type OnKilledAccount = ();
 	}
 
 	impl Trait for Test {
@@ -705,6 +716,7 @@ mod tests {
 			Stablecoin::add_bid(Bid::new(1, Perbill::from_percent(25), 5 * BASE_UNIT));
 			Stablecoin::add_bid(Bid::new(1, Perbill::from_percent(33), 5 * BASE_UNIT));
 			Stablecoin::add_bid(Bid::new(1, Perbill::from_percent(50), 5 * BASE_UNIT));
+			Stablecoin::add_bid(Bid::new(1, Perbill::from_percent(34), 5 * BASE_UNIT));
 
 			let bids = Stablecoin::bond_bids();
 			let prices: Vec<_> = bids.into_iter().map(|Bid { price, .. }| price).collect();
@@ -712,6 +724,7 @@ mod tests {
 				prices,
 				vec![
 					Perbill::from_percent(50),
+					Perbill::from_percent(34),
 					Perbill::from_percent(33),
 					Perbill::from_percent(25)
 				]
@@ -800,7 +813,7 @@ mod tests {
 			let bonds = Stablecoin::bonds();
 			assert_eq!(bonds.len(), 1);
 			let bond = &bonds[0];
-			assert_eq!(bond.expiration, ExpirationPeriod::get() + 1);
+			assert_eq!(bond.expiration, System::block_number() + ExpirationPeriod::get());
 		})
 	}
 
@@ -816,12 +829,58 @@ mod tests {
 			let bonds = Stablecoin::bonds();
 			assert_eq!(bonds.len(), 1);
 			let bond = &bonds[0];
-			assert_eq!(bond.expiration, 101);
+			assert_eq!(bond.expiration, System::block_number() + ExpirationPeriod::get());
 
 			let prev_supply = Stablecoin::coin_supply();
 			// set blocknumber past expiration time
-			System::set_block_number(ExpirationPeriod::get() + 20);
+			System::set_block_number(System::block_number() + ExpirationPeriod::get());
+			assert_ok!(Stablecoin::expand_supply(42));
+			assert_eq!(
+				prev_supply,
+				Stablecoin::coin_supply(),
+				"coin supply should not change as the bond expired"
+			);
+		});
+	}
+
+	#[test]
+	fn expire_bonds_and_expand_supply() {
+		new_test_ext().execute_with(|| {
+			assert_ok!(Stablecoin::init(Origin::signed(1)));
+			Stablecoin::_add_bond(Stablecoin::new_bond(
+				3,
+				Fixed64::from_rational(20, 100).saturated_multiply_accumulate(BASE_UNIT),
+			));
+
+			let bonds = Stablecoin::bonds();
+			assert_eq!(bonds.len(), 1);
+			let bond = &bonds[0];
+			assert_eq!(bond.expiration, System::block_number() + ExpirationPeriod::get());
+
+			let prev_supply = Stablecoin::coin_supply();
+			// set blocknumber past expiration time
+			System::set_block_number(System::block_number() + ExpirationPeriod::get() - 1);
+			Stablecoin::_add_bond(Stablecoin::new_bond(
+				3,
+				Fixed64::from_rational(20, 100).saturated_multiply_accumulate(BASE_UNIT),
+			));
+
+			let bonds = Stablecoin::bonds();
+			// check supply
+			assert_eq!(bonds.len(), 2);
+			System::set_block_number(System::block_number() + 1);
+			// contract the supply, only hitting the last bond that was added to the queue, but not fully destroiying it
+			assert_ok!(Stablecoin::contract_supply(1));
+			// make sure the is only one bond left
+			assert_eq!(bonds.len(), 1);
+			// find out how much we have
+			// assert_eq!(supply, Stablecoin::coin_supply());
+			let prev_supply = Stablecoin::coin_supply();
+			// Set the block number to be exactly equal to the expiration date of the only bond in the queue
+			System::set_block_number(System::block_number() + ExpirationPeriod::get() - 1);
+			// try to contract_supply -> supply shouldn't change
 			assert_ok!(Stablecoin::contract_supply(42));
+			// make sure it hasn't changed
 			assert_eq!(
 				prev_supply,
 				Stablecoin::coin_supply(),
