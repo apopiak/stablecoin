@@ -16,10 +16,7 @@ use frame_support::{
 	traits::Get,
 };
 use num_rational::Ratio;
-use sp_runtime::{
-	traits::{CheckedMul},
-	Fixed64, PerThing, Perbill,
-};
+use sp_runtime::{traits::CheckedMul, Fixed64, PerThing, Perbill};
 use sp_std::collections::vec_deque::VecDeque;
 use sp_std::iter;
 use static_assertions::const_assert;
@@ -48,6 +45,8 @@ pub trait Trait: system::Trait {
 
 	/// The maximum amount of bids allowed in the queue. Used to prevent the queue from growing forever.
 	type MaximumBids: Get<usize>;
+	/// How often adjustments should be made based on the price
+	type AdjustmentFrequency: Get<<Self as system::Trait>::BlockNumber>;
 }
 
 /// The type used to represent the account balance for the stablecoin.
@@ -69,9 +68,8 @@ const SHARE_SUPPLY: u64 = 100;
 // The Basis whitepaper recommends 10% based on simulations.
 const MINIMUM_BOND_PRICE: Perbill = Perbill::from_percent(10);
 
-
 /// A bond representing (possible) future payout of coins.
-/// 
+///
 /// Expires at block `expiration` so it will be discarded if payed out after that block.
 #[derive(Encode, Decode, Default, Clone, PartialEq, PartialOrd, Eq, Ord)]
 #[cfg_attr(feature = "std", derive(Debug))]
@@ -82,7 +80,7 @@ pub struct Bond<AccountId, BlockNumber> {
 }
 
 /// A bid for a bond of the stablecoin at a certain price.
-/// 
+///
 /// `price_in_coins` is the amount of coins burned.
 /// `quantity` is the amount of coins gained on payout.
 #[derive(Encode, Decode, Default, Clone, PartialEq)]
@@ -297,7 +295,7 @@ decl_module! {
 			Ok(())
 		}
 
-		/// Cancel all bids at or below `price` of the sender.
+		/// Cancel all bids at or below `price` of the sender and refund the coins.
 		pub fn cancel_bids_at_or_below(origin, price: Perbill) -> DispatchResult {
 			let who = ensure_signed(origin)?;
 
@@ -308,7 +306,7 @@ decl_module! {
 			Ok(())
 		}
 
-		/// Cancel all bids belonging to the sender.
+		/// Cancel all bids belonging to the sender and refund the coins.
 		pub fn cancel_all_bids(origin) -> DispatchResult {
 			let who = ensure_signed(origin)?;
 
@@ -319,9 +317,10 @@ decl_module! {
 			Ok(())
 		}
 
-		/// Adjusts the amount of coins according to the price.
-		fn on_initialize(_n: T::BlockNumber) {
-			Self::_on_block().unwrap_or_else(|e| {
+		/// Adjust the amount of coins according to the price.
+		fn on_initialize(n: T::BlockNumber) {
+			let price = T::CoinPrice::fetch_price();
+			Self::on_block_with_price(n, price).unwrap_or_else(|e| {
 				native::error!("could not adjust supply: {:?}", e);
 			});
 		}
@@ -331,7 +330,7 @@ decl_module! {
 impl<T: Trait> Module<T> {
 	/// Add `amount` coins to the balance for `account`.
 	fn add_balance(account: &T::AccountId, amount: Coins) -> DispatchResult {
-		<Balance<T>>::try_mutate(account, |b: &mut u64| -> DispatchResult{
+		<Balance<T>>::try_mutate(account, |b: &mut u64| -> DispatchResult {
 			*b = b.checked_add(amount).ok_or(Error::<T>::BalanceOverflow)?;
 			Ok(())
 		})?;
@@ -340,13 +339,12 @@ impl<T: Trait> Module<T> {
 
 	/// Remove `amount` coins from the balance of `account`.
 	fn remove_balance(account: &T::AccountId, amount: Coins) -> DispatchResult {
-		<Balance<T>>::try_mutate(&account, |b: &mut u64| -> DispatchResult{
+		<Balance<T>>::try_mutate(&account, |b: &mut u64| -> DispatchResult {
 			*b = b.checked_sub(amount).ok_or(Error::<T>::InsufficientBalance)?;
 			Ok(())
 		})?;
 		Ok(())
 	}
-
 
 	fn add_bid(bid: Bid<T::AccountId>) -> DispatchResult {
 		let mut bids = Self::bond_bids();
@@ -363,7 +361,7 @@ impl<T: Trait> Module<T> {
 	// TODO: use priority queue (binaryheap?)
 	// TODO: be careful with malicious actor who would constantly bid an amount equal
 	//		 to the last bid in the queue and evict people on purpose.
-	fn _add_bid_to(bid: Bid<T::AccountId>, bids: &mut Vec<Bid<T::AccountId>>) -> DispatchResult{
+	fn _add_bid_to(bid: Bid<T::AccountId>, bids: &mut Vec<Bid<T::AccountId>>) -> DispatchResult {
 		let index: usize = bids
 			// sort the bids from highest to lowest
 			.binary_search_by(|&Bid { price, .. }| bid.price.cmp(&price))
@@ -391,7 +389,7 @@ impl<T: Trait> Module<T> {
 
 		bids.retain(|b| {
 			if cancel_for(b) {
-				Self::refund_bid(b).unwrap_or_else(|e|{
+				Self::refund_bid(b).unwrap_or_else(|e| {
 					native::error!("{:?}", e);
 					debug_assert!(false, "refund should not fail");
 				});
@@ -409,21 +407,21 @@ impl<T: Trait> Module<T> {
 			0 => {
 				native::error!("coin price is zero!");
 				return Err(DispatchError::from(Error::<T>::ZeroPrice));
-			},
+			}
 			price if price > BASE_UNIT => {
 				// safe from underflow because `price` is checked to be greater than `BASE_UNIT`
 				let fraction = Fixed64::from_rational(price as i64, BASE_UNIT) - Fixed64::from_natural(1);
 				let supply = Self::coin_supply();
 				let contract_by = saturated_mul(fraction, supply);
 				Self::contract_supply(contract_by)?;
-			},
+			}
 			price if price < BASE_UNIT => {
 				// safe from underflow because `price` is checked to be less than `BASE_UNIT`
 				let fraction = Fixed64::from_rational(BASE_UNIT as i64, price) - Fixed64::from_natural(1);
 				let supply = Self::coin_supply();
 				let expand_by = saturated_mul(fraction, supply);
 				Self::expand_supply(expand_by)?;
-			},
+			}
 			_ => {
 				native::info!("coin price is equal to base as is desired --> nothing to do");
 			}
@@ -434,7 +432,9 @@ impl<T: Trait> Module<T> {
 	fn contract_supply(amount: Coins) -> DispatchResult {
 		// Checking whether coin supply would underflow.
 		let coin_supply = Self::coin_supply();
-		let remaining_supply = coin_supply.checked_sub(amount).ok_or(Error::<T>::CoinSupplyUnderflow)?;
+		let remaining_supply = coin_supply
+			.checked_sub(amount)
+			.ok_or(Error::<T>::CoinSupplyUnderflow)?;
 		if remaining_supply < MINIMUM_COIN_SUPPLY {
 			return Err(DispatchError::from(Error::<T>::CoinSupplyUnderflow));
 		}
@@ -455,9 +455,7 @@ impl<T: Trait> Module<T> {
 			} else {
 				let payment = bid.payment();
 				let Bid {
-					account,
-					quantity,
-					..
+					account, quantity, ..
 				} = bid;
 				new_bonds.push_back(Self::new_bond(account, quantity));
 				remaining -= payment;
@@ -470,7 +468,11 @@ impl<T: Trait> Module<T> {
 			.checked_sub(burned)
 			.ok_or(Error::<T>::CoinSupplyUnderflow)?;
 		for bond in new_bonds.iter() {
-			Self::deposit_event(RawEvent::NewBond(bond.account.clone(), bond.payout, bond.expiration));
+			Self::deposit_event(RawEvent::NewBond(
+				bond.account.clone(),
+				bond.payout,
+				bond.expiration,
+			));
 		}
 		let mut bonds = Self::bonds();
 		bonds.append(&mut new_bonds);
@@ -499,7 +501,9 @@ impl<T: Trait> Module<T> {
 	fn expand_supply(amount: Coins) -> DispatchResult {
 		// Checking whether the supply will overflow.
 		let coin_supply = Self::coin_supply();
-		coin_supply.checked_add(amount).ok_or(Error::<T>::CoinSupplyOverflow)?;
+		coin_supply
+			.checked_add(amount)
+			.ok_or(Error::<T>::CoinSupplyOverflow)?;
 
 		let mut bonds = Self::bonds();
 		let mut remaining = amount;
@@ -520,15 +524,17 @@ impl<T: Trait> Module<T> {
 			// bond does not cover the remaining amount --> resolve and continue
 			if payout <= remaining {
 				// this is safe because we are in the branch where remaining >= payout
-				remaining = remaining - payout;
-				Self::add_balance(&account, payout).expect("one account should never have more coins than the supply; qed");
+				remaining -= payout;
+				Self::add_balance(&account, payout)
+					.expect("one account should never have more coins than the supply; qed");
 				Self::deposit_event(RawEvent::BondFulfilled(account, payout));
 			}
 			// bond covers the remaining amount --> update and finish up
 			else {
 				// this is safe because we are in the else branch where payout > remaining
 				let payout = payout - remaining;
-				Self::add_balance(&account, remaining).expect("one account should never have more coins than the supply; qed");
+				Self::add_balance(&account, remaining)
+					.expect("one account should never have more coins than the supply; qed");
 				Self::_add_bond(Bond {
 					account: account.clone(),
 					payout,
@@ -556,7 +562,9 @@ impl<T: Trait> Module<T> {
 	fn hand_out_coins_to_shareholders(amount: Coins) -> DispatchResult {
 		// Checking whether the supply will overflow.
 		let coin_supply = Self::coin_supply();
-		coin_supply.checked_add(amount).ok_or(Error::<T>::CoinSupplyOverflow)?;
+		coin_supply
+			.checked_add(amount)
+			.ok_or(Error::<T>::CoinSupplyOverflow)?;
 
 		let supply = Self::share_supply();
 		let shares = Self::shares();
@@ -591,9 +599,13 @@ impl<T: Trait> Module<T> {
 		Ok(())
 	}
 
-	fn _on_block() -> DispatchResult {
-		let price = T::CoinPrice::fetch_price();
-		Self::expand_or_contract_on_price(price)
+	fn on_block_with_price(block: T::BlockNumber, price: Coins) -> DispatchResult {
+		// This can be changed to only correct for small or big price swings.
+		if block % T::AdjustmentFrequency::get() == 0.into() {
+			Self::expand_or_contract_on_price(price)
+		} else {
+			Ok(())
+		}
 	}
 }
 
@@ -654,6 +666,8 @@ mod tests {
 		pub const ExpirationPeriod: u64 = 100;
 		// allow few bids
 		pub const MaximumBids: usize = 10;
+		// adjust supply every second block
+		pub const AdjustmentFrequency: u64 = 2;
 	}
 
 	impl system::Trait for Test {
@@ -680,9 +694,10 @@ mod tests {
 
 	impl Trait for Test {
 		type Event = ();
+		type CoinPrice = RandomPrice;
 		type ExpirationPeriod = ExpirationPeriod;
 		type MaximumBids = MaximumBids;
-		type CoinPrice = RandomPrice;
+		type AdjustmentFrequency = AdjustmentFrequency;
 	}
 
 	type System = system::Module<Test>;
@@ -747,10 +762,22 @@ mod tests {
 		new_test_ext().execute_with(|| {
 			assert_ok!(Stablecoin::init(Origin::signed(1)));
 
-			assert_ok!(Stablecoin::add_bid(Bid::new(1, Perbill::from_percent(25), 5 * BASE_UNIT)));
-			assert_ok!(Stablecoin::add_bid(Bid::new(1, Perbill::from_percent(33), 5 * BASE_UNIT)));
-			assert_ok!(Stablecoin::add_bid(Bid::new(1, Perbill::from_percent(50), 5 * BASE_UNIT)));
-			assert_ok!(Stablecoin::add_bid(Bid::new(1, Perbill::from_percent(34), 5 * BASE_UNIT)));
+			let bid_amount = 5 * BASE_UNIT;
+			assert_ok!(Stablecoin::add_bid(Bid::new(
+				1,
+				Perbill::from_percent(25),
+				bid_amount
+			)));
+			assert_ok!(Stablecoin::add_bid(Bid::new(
+				1,
+				Perbill::from_percent(33),
+				bid_amount
+			)));
+			assert_ok!(Stablecoin::add_bid(Bid::new(
+				1,
+				Perbill::from_percent(50),
+				bid_amount
+			)));
 
 			let bids = Stablecoin::bond_bids();
 			let prices: Vec<_> = bids.into_iter().map(|Bid { price, .. }| price).collect();
@@ -771,8 +798,13 @@ mod tests {
 		new_test_ext().execute_with(|| {
 			assert_ok!(Stablecoin::init(Origin::signed(1)));
 
+			let bid_amount = 5 * BASE_UNIT;
 			for _i in 0..(2 * MaximumBids::get()) {
-				assert_ok!(Stablecoin::add_bid(Bid::new(1, Perbill::from_percent(25), 5 * BASE_UNIT)));
+				assert_ok!(Stablecoin::add_bid(Bid::new(
+					1,
+					Perbill::from_percent(25),
+					bid_amount
+				)));
 			}
 
 			assert_eq!(Stablecoin::bond_bids().len(), MaximumBids::get());
@@ -801,10 +833,27 @@ mod tests {
 		new_test_ext().execute_with(|| {
 			assert_ok!(Stablecoin::init(Origin::signed(1)));
 
-			assert_ok!(Stablecoin::add_bid(Bid::new(1, Perbill::from_percent(25), 5 * BASE_UNIT)));
-			assert_ok!(Stablecoin::add_bid(Bid::new(2, Perbill::from_percent(33), 5 * BASE_UNIT)));
-			assert_ok!(Stablecoin::add_bid(Bid::new(1, Perbill::from_percent(50), 5 * BASE_UNIT)));
-			assert_ok!(Stablecoin::add_bid(Bid::new(3, Perbill::from_percent(50), 5 * BASE_UNIT)));
+			let bid_amount = 5 * BASE_UNIT;
+			assert_ok!(Stablecoin::add_bid(Bid::new(
+				1,
+				Perbill::from_percent(25),
+				bid_amount
+			)));
+			assert_ok!(Stablecoin::add_bid(Bid::new(
+				2,
+				Perbill::from_percent(33),
+				bid_amount
+			)));
+			assert_ok!(Stablecoin::add_bid(Bid::new(
+				1,
+				Perbill::from_percent(50),
+				bid_amount
+			)));
+			assert_ok!(Stablecoin::add_bid(Bid::new(
+				3,
+				Perbill::from_percent(50),
+				bid_amount
+			)));
 			assert_eq!(Stablecoin::bond_bids().len(), 4);
 
 			assert_ok!(Stablecoin::cancel_all_bids(Origin::signed(1)));
@@ -822,11 +871,32 @@ mod tests {
 		new_test_ext().execute_with(|| {
 			assert_ok!(Stablecoin::init(Origin::signed(1)));
 
-			assert_ok!(Stablecoin::add_bid(Bid::new(1, Perbill::from_percent(25), 5 * BASE_UNIT)));
-			assert_ok!(Stablecoin::add_bid(Bid::new(2, Perbill::from_percent(33), 5 * BASE_UNIT)));
-			assert_ok!(Stablecoin::add_bid(Bid::new(1, Perbill::from_percent(45), 5 * BASE_UNIT)));
-			assert_ok!(Stablecoin::add_bid(Bid::new(1, Perbill::from_percent(50), 5 * BASE_UNIT)));
-			assert_ok!(Stablecoin::add_bid(Bid::new(3, Perbill::from_percent(55), 5 * BASE_UNIT)));
+			let bid_amount = 5 * BASE_UNIT;
+			assert_ok!(Stablecoin::add_bid(Bid::new(
+				1,
+				Perbill::from_percent(25),
+				bid_amount
+			)));
+			assert_ok!(Stablecoin::add_bid(Bid::new(
+				2,
+				Perbill::from_percent(33),
+				bid_amount
+			)));
+			assert_ok!(Stablecoin::add_bid(Bid::new(
+				1,
+				Perbill::from_percent(45),
+				bid_amount
+			)));
+			assert_ok!(Stablecoin::add_bid(Bid::new(
+				1,
+				Perbill::from_percent(50),
+				bid_amount
+			)));
+			assert_ok!(Stablecoin::add_bid(Bid::new(
+				3,
+				Perbill::from_percent(55),
+				bid_amount
+			)));
 			assert_eq!(Stablecoin::bond_bids().len(), 5);
 
 			assert_ok!(Stablecoin::cancel_bids_at_or_below(
@@ -890,8 +960,7 @@ mod tests {
 			assert_ok!(Stablecoin::expand_supply(42));
 			let acc_balance = Stablecoin::get_balance(acc);
 			assert_eq!(
-				prev_acc_balance,
-				acc_balance,
+				prev_acc_balance, acc_balance,
 				"account balance should not change as the bond expired"
 			);
 			assert_eq!(
@@ -955,7 +1024,10 @@ mod tests {
 			assert_eq!(prev_first_acc_balance, Stablecoin::get_balance(first_acc));
 			// make sure the second account's balance has increased by one
 			let intermediate_second_acc_balance = prev_second_acc_balance + new_coins;
-			assert_eq!(prev_second_acc_balance + new_coins, Stablecoin::get_balance(second_acc));
+			assert_eq!(
+				prev_second_acc_balance + new_coins,
+				Stablecoin::get_balance(second_acc)
+			);
 			// make sure total supply increased by `new_coins`
 			assert_eq!(prev_supply + new_coins, Stablecoin::coin_supply());
 
@@ -972,7 +1044,10 @@ mod tests {
 
 			// make sure first and second's balances haven't changed
 			assert_eq!(prev_first_acc_balance, Stablecoin::get_balance(first_acc));
-			assert_eq!(intermediate_second_acc_balance, Stablecoin::get_balance(second_acc));
+			assert_eq!(
+				intermediate_second_acc_balance,
+				Stablecoin::get_balance(second_acc)
+			);
 
 			// Make sure coin supply has increased by `new_coins`
 			assert_eq!(
@@ -1155,8 +1230,16 @@ mod tests {
 				.checked_mul(&BASE_UNIT.into())
 				.map(|r| r.to_integer())
 				.expect("bond_amount should not have overflowed");
-			assert_ok!(Stablecoin::add_bid(Bid::new(1, Perbill::from_percent(80), bond_amount)));
-			assert_ok!(Stablecoin::add_bid(Bid::new(2, Perbill::from_percent(75), 2 * BASE_UNIT)));
+			assert_ok!(Stablecoin::add_bid(Bid::new(
+				1,
+				Perbill::from_percent(80),
+				bond_amount
+			)));
+			assert_ok!(Stablecoin::add_bid(Bid::new(
+				2,
+				Perbill::from_percent(75),
+				2 * BASE_UNIT
+			)));
 
 			let prev_supply = Stablecoin::coin_supply();
 			let amount = 2 * BASE_UNIT;
@@ -1240,7 +1323,8 @@ mod tests {
 			}
 
 			for _ in 0..150 {
-				Stablecoin::_on_block().unwrap_or_else(|e| {
+				let price = RandomPrice::fetch_price();
+				Stablecoin::on_block_with_price(0, price).unwrap_or_else(|e| {
 					log::error!("could not adjust supply: {:?}", e);
 				});
 			}
