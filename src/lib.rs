@@ -17,7 +17,7 @@ use frame_support::{
 };
 use num_rational::Ratio;
 use sp_runtime::{
-	traits::{CheckedMul, Saturating},
+	traits::{CheckedMul},
 	Fixed64, PerThing, Perbill,
 };
 use sp_std::collections::vec_deque::VecDeque;
@@ -105,7 +105,7 @@ impl<AccountId> Bid<AccountId> {
 		let inverse_price: Ratio<u64> = Ratio::new(Perbill::ACCURACY.into(), self.price.deconstruct().into());
 		// Should never overflow, but better safe than sorry.
 		let removed_quantity = inverse_price
-			.checked_mul(&mut coins.into())
+			.checked_mul(&coins.into())
 			.map(|r| r.to_integer())
 			.ok_or(BidError::Overflow)?;
 		self.price_in_coins = self
@@ -343,30 +343,34 @@ impl<T: Trait> Module<T> {
 	/// Expands (if the price is too high) or contracts (if the price is too low)
 	/// the coin supply.
 	fn expand_or_contract_on_price(price: Coins) -> DispatchResult {
-		if price == 0 {
-			native::error!("coin price is zero!");
-			return Err(DispatchError::from(Error::<T>::ZeroPrice));
-		}
-		if price > BASE_UNIT {
-			// safe from underflow because `price` is checked to be greater than `BASE_UNIT`
-			let fraction = Fixed64::from_rational(price as i64, BASE_UNIT) - Fixed64::from_natural(1);
-			let supply = Self::coin_supply();
-			let contract_by = fraction
-				.saturated_multiply_accumulate(supply)
-				.checked_sub(supply)
-				.ok_or(Error::<T>::GenericUnderflow)?;
-			Self::contract_supply(contract_by)?;
-		} else if price < BASE_UNIT {
-			// safe from underflow because `price` is checked to be less than `BASE_UNIT`
-			let fraction = Fixed64::from_rational(BASE_UNIT as i64, price) - Fixed64::from_natural(1);
-			let supply = Self::coin_supply();
-			let expand_by = fraction
-				.saturated_multiply_accumulate(supply)
-				.checked_sub(supply)
-				.ok_or(Error::<T>::GenericUnderflow)?;
-			Self::expand_supply(expand_by)?;
-		} else {
-			native::info!("coin price is equal to base as is desired --> nothing to do");
+		match price {
+			0 => {
+				native::error!("coin price is zero!");
+				return Err(DispatchError::from(Error::<T>::ZeroPrice));
+			},
+			price if price > BASE_UNIT => {
+				// safe from underflow because `price` is checked to be greater than `BASE_UNIT`
+				let fraction = Fixed64::from_rational(price as i64, BASE_UNIT) - Fixed64::from_natural(1);
+				let supply = Self::coin_supply();
+				let contract_by = fraction
+					.saturated_multiply_accumulate(supply)
+					.checked_sub(supply)
+					.ok_or(Error::<T>::GenericUnderflow)?;
+				Self::contract_supply(contract_by)?;
+			},
+			price if price < BASE_UNIT => {
+				// safe from underflow because `price` is checked to be less than `BASE_UNIT`
+				let fraction = Fixed64::from_rational(BASE_UNIT as i64, price) - Fixed64::from_natural(1);
+				let supply = Self::coin_supply();
+				let expand_by = fraction
+					.saturated_multiply_accumulate(supply)
+					.checked_sub(supply)
+					.ok_or(Error::<T>::GenericUnderflow)?;
+				Self::expand_supply(expand_by)?;
+			},
+			_ => {
+				native::info!("coin price is equal to base as is desired --> nothing to do");
+			}
 		}
 		Ok(())
 	}
@@ -385,10 +389,10 @@ impl<T: Trait> Module<T> {
 		let mut bids = Self::bond_bids();
 		let mut remaining = amount;
 		let mut new_bonds = VecDeque::new();
-		while remaining > 0 && bids.len() > 0 {
+		while remaining > 0 && !bids.is_empty() {
 			let mut bid = bids.remove(0);
 			if bid.price_in_coins >= remaining {
-				let removed_quantity = bid.remove_coins(remaining).map_err(|e| Error::<T>::from(e))?;
+				let removed_quantity = bid.remove_coins(remaining).map_err(Error::<T>::from)?;
 				new_bonds.push_back(Self::new_bond(bid.account.clone(), removed_quantity));
 				// re-add bid with reduced amount
 				if bid.price_in_coins > 0 && bid.quantity > 0 {
@@ -585,7 +589,7 @@ mod tests {
 			let random = thread_rng().gen_range(500, 1500);
 			let ratio: Ratio<u64> = Ratio::new(random, 1000);
 			let next = ratio
-				.checked_mul(&mut prev.into())
+				.checked_mul(&prev.into())
 				.map(|r| r.to_integer())
 				.unwrap_or(prev);
 			LAST_PRICE.store(next + 1, Ordering::SeqCst);
@@ -630,7 +634,7 @@ mod tests {
 		type ModuleToIndex = ();
 		type AccountData = ();
 		type OnNewAccount = ();
-		type OnReapAccount = ();
+		type OnKilledAccount = ();
 	}
 
 	impl Trait for Test {
@@ -999,7 +1003,7 @@ mod tests {
 			));
 
 			let bond_amount = Ratio::new(125, 100)
-				.checked_mul(&mut BASE_UNIT.into())
+				.checked_mul(&BASE_UNIT.into())
 				.map(|r| r.to_integer())
 				.unwrap();
 			Stablecoin::add_bid(Bid::new(1, Perbill::from_percent(80), bond_amount));
