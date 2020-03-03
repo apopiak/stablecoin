@@ -514,18 +514,16 @@ impl<T: Trait> Module<T> {
 			}
 			// bond does not cover the remaining amount --> resolve and continue
 			if payout <= remaining {
-				remaining = remaining
-					.checked_sub(payout)
-					.ok_or(Error::<T>::GenericUnderflow)?;
-				Self::add_balance(&account, payout)?;
+				// this is safe because we are in the branch where remaining >= payout
+				remaining = remaining - payout;
+				Self::add_balance(&account, payout).expect("one account should never have more coins than the supply; qed");
 				Self::deposit_event(RawEvent::BondFulfilled(account, payout));
 			}
 			// bond covers the remaining amount --> update and finish up
 			else {
-				let payout = payout
-					.checked_sub(remaining)
-					.ok_or(Error::<T>::GenericUnderflow)?;
-				Self::add_balance(&account, remaining)?;
+				// this is safe because we are in the else branch where payout > remaining
+				let payout = payout - remaining;
+				Self::add_balance(&account, remaining).expect("one account should never have more coins than the supply; qed");
 				Self::_add_bond(Bond {
 					account: account.clone(),
 					payout,
@@ -536,6 +534,7 @@ impl<T: Trait> Module<T> {
 			}
 		}
 		// safe to do this late because of the test in the first line of the function
+		// safe to substrate remaining because we initialize it with amount and never increase it
 		Self::try_increase_coin_supply(amount - remaining)?;
 		<Bonds<T>>::put(bonds);
 		if remaining > 0 {
