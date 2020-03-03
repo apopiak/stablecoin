@@ -874,8 +874,10 @@ mod tests {
 	fn expire_bonds() {
 		new_test_ext().execute_with(|| {
 			assert_ok!(Stablecoin::init(Origin::signed(1)));
+			let acc = 3;
+			let prev_acc_balance = Stablecoin::get_balance(acc);
 			Stablecoin::_add_bond(Stablecoin::new_bond(
-				3,
+				acc,
 				Fixed64::from_rational(20, 100).saturated_multiply_accumulate(BASE_UNIT),
 			));
 
@@ -888,10 +890,16 @@ mod tests {
 			// set blocknumber past expiration time
 			System::set_block_number(System::block_number() + ExpirationPeriod::get());
 			assert_ok!(Stablecoin::expand_supply(42));
+			let acc_balance = Stablecoin::get_balance(acc);
 			assert_eq!(
-				prev_supply,
+				prev_acc_balance,
+				acc_balance,
+				"account balance should not change as the bond expired"
+			);
+			assert_eq!(
+				prev_supply + 42,
 				Stablecoin::coin_supply(),
-				"coin supply should not change as the bond expired"
+				"coin supply should have increased"
 			);
 		});
 	}
@@ -900,8 +908,10 @@ mod tests {
 	fn expire_bonds_and_expand_supply() {
 		new_test_ext().execute_with(|| {
 			assert_ok!(Stablecoin::init(Origin::signed(1)));
+			let first_acc = 3;
+			let prev_first_acc_balance = Stablecoin::get_balance(first_acc);
 			Stablecoin::_add_bond(Stablecoin::new_bond(
-				3,
+				first_acc,
 				Fixed64::from_rational(20, 100).saturated_multiply_accumulate(BASE_UNIT),
 			));
 
@@ -911,31 +921,64 @@ mod tests {
 			assert_eq!(bond.expiration, System::block_number() + ExpirationPeriod::get());
 
 			let prev_supply = Stablecoin::coin_supply();
-			// set blocknumber past expiration time
+			let second_acc = first_acc + 1;
+			let prev_second_acc_balance = Stablecoin::get_balance(second_acc);
+			// set blocknumber to the block number right before the first bond's expiration block
 			System::set_block_number(System::block_number() + ExpirationPeriod::get() - 1);
+			// Add a new bond
 			Stablecoin::_add_bond(Stablecoin::new_bond(
-				3,
+				second_acc,
+				Fixed64::from_rational(20, 100).saturated_multiply_accumulate(BASE_UNIT),
+			));
+			Stablecoin::_add_bond(Stablecoin::new_bond(
+				second_acc,
+				Fixed64::from_rational(20, 100).saturated_multiply_accumulate(BASE_UNIT),
+			));
+			Stablecoin::_add_bond(Stablecoin::new_bond(
+				second_acc,
+				Fixed64::from_rational(20, 100).saturated_multiply_accumulate(BASE_UNIT),
+			));
+			// This one is from first_acc
+			Stablecoin::_add_bond(Stablecoin::new_bond(
+				first_acc,
 				Fixed64::from_rational(20, 100).saturated_multiply_accumulate(BASE_UNIT),
 			));
 
-			let bonds = Stablecoin::bonds();
-			// check supply
-			assert_eq!(bonds.len(), 2);
+			// check bonds length
+			assert_eq!(Stablecoin::bonds().len(), 5);
+			// Increase block number by one so that we reach the first bond's expiration block number.
 			System::set_block_number(System::block_number() + 1);
-			// contract the supply, only hitting the last bond that was added to the queue, but not fully destroiying it
-			assert_ok!(Stablecoin::contract_supply(1));
-			// make sure the is only one bond left
-			assert_eq!(bonds.len(), 1);
-			// find out how much we have
-			// assert_eq!(supply, Stablecoin::coin_supply());
-			let prev_supply = Stablecoin::coin_supply();
-			// Set the block number to be exactly equal to the expiration date of the only bond in the queue
+			// expand the supply, only hitting the last bond that was added to the queue, but not fully filling it
+			let new_coins = 1;
+			assert_ok!(Stablecoin::expand_supply(new_coins));
+			// make sure there is only three bond left (the first one expired, the second one got consumed)
+			assert_eq!(Stablecoin::bonds().len(), 3);
+			// make sure the first account's balance hasn't moved
+			assert_eq!(prev_first_acc_balance, Stablecoin::get_balance(first_acc));
+			// make sure the second account's balance has increased by one
+			let intermediate_second_acc_balance = prev_second_acc_balance + new_coins;
+			assert_eq!(prev_second_acc_balance + new_coins, Stablecoin::get_balance(second_acc));
+			// make sure total supply increased by `new_coins`
+			assert_eq!(prev_supply + new_coins, Stablecoin::coin_supply());
+
+			let intermediate_supply = Stablecoin::coin_supply();
+			// Set the block number to be *exactly equal* to the expiration date of all bonds that are left in the queue
 			System::set_block_number(System::block_number() + ExpirationPeriod::get() - 1);
-			// try to contract_supply -> supply shouldn't change
-			assert_ok!(Stablecoin::contract_supply(42));
-			// make sure it hasn't changed
+
+			// try to expand_supply, expected to fail because all bonds have expired
+			let new_coins = 42;
+			assert_ok!(Stablecoin::expand_supply(new_coins));
+
+			// make sure there are no bonds left (they have all expired)
+			assert_eq!(Stablecoin::bonds().len(), 0);
+
+			// make sure first and second's balances haven't changed
+			assert_eq!(prev_first_acc_balance, Stablecoin::get_balance(first_acc));
+			assert_eq!(intermediate_second_acc_balance, Stablecoin::get_balance(second_acc));
+
+			// Make sure coin supply has increased by `new_coins`
 			assert_eq!(
-				prev_supply,
+				intermediate_supply + new_coins,
 				Stablecoin::coin_supply(),
 				"coin supply should not change as the bond expired"
 			);
