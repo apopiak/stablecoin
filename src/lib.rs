@@ -25,6 +25,10 @@ use sp_std::iter;
 use static_assertions::const_assert;
 use system::ensure_signed;
 
+mod utils;
+
+use utils::saturated_mul;
+
 /// Trait for getting a price.
 pub trait FetchPrice<Balance> {
 	/// Fetch the current price.
@@ -129,6 +133,7 @@ decl_event!(
 		Initialized(AccountId),
 		Transfer(AccountId, AccountId, u64),
 		NewBid(AccountId, Perbill, u64),
+		RefundedBid(AccountId, u64),
 		NewBond(AccountId, u64, BlockNumber),
 		BondFulfilled(AccountId, u64),
 		BondPartiallyFulfilled(AccountId, u64),
@@ -142,9 +147,10 @@ decl_event!(
 
 decl_error! {
 	pub enum Error for Module<T: Trait> {
-		InsufficientBalance,
 		CoinOverflow,
 		CoinUnderflow,
+		InsufficientBalance,
+		BalanceOverflow,
 		ZeroPrice,
 		GenericOverflow,
 		GenericUnderflow,
@@ -261,17 +267,13 @@ decl_module! {
 			ensure!(price > MINIMUM_BOND_PRICE, "offered price is lower than the minimum");
 			ensure!(payout >= Fixed64::from_natural(MINIMUM_BOND_PAYOUT), "payout is lower than the minimum");
 
-			// payout > 1 and we want to calculate the payout of coins
-			// saturated_multiply_accumulate = int + self * int
-			// --> subtract 1 from payout
-			let payout = payout - Fixed64::from_natural(1);
-			let quantity = payout.saturated_multiply_accumulate(BASE_UNIT);
+			let quantity = saturated_mul(payout, BASE_UNIT);
 
 			// this is fine because `Perbill` is designed to be used with balance types and `price` is ensured
 			// to be between `MINIMUM_BOND_PRICE` and 1
 			let price_in_coins = price * quantity;
-			<Balance<T>>::try_mutate(&who, |b| -> DispatchResult { b.checked_sub(price_in_coins).ok_or(Error::<T>::InsufficientBalance)?; Ok(()) })?;
-			Self::add_bid(Bid::new(who.clone(), price, quantity));
+			Self::remove_balance(&who, price_in_coins)?;
+			Self::add_bid(Bid::new(who.clone(), price, quantity))?;
 
 			Self::deposit_event(RawEvent::NewBid(who, price, quantity));
 
@@ -310,23 +312,55 @@ decl_module! {
 }
 
 impl<T: Trait> Module<T> {
-	fn add_bid(bid: Bid<T::AccountId>) {
+	/// Add `amount` coins to the balance for `account`.
+	fn add_balance(account: &T::AccountId, amount: Coins) -> DispatchResult {
+		<Balance<T>>::try_mutate(account, |b: &mut u64| -> DispatchResult{
+			*b = b.checked_add(amount).ok_or(Error::<T>::BalanceOverflow)?;
+			Ok(())
+		})?;
+		Ok(())
+	}
+
+	/// Remove `amount` coins from the balance of `account`.
+	fn remove_balance(account: &T::AccountId, amount: Coins) -> DispatchResult {
+		<Balance<T>>::try_mutate(&account, |b: &mut u64| -> DispatchResult{
+			*b = b.checked_sub(amount).ok_or(Error::<T>::InsufficientBalance)?;
+			Ok(())
+		})?;
+		Ok(())
+	}
+
+
+	fn add_bid(bid: Bid<T::AccountId>) -> DispatchResult {
 		let mut bids = Self::bond_bids();
 
-		Self::_add_bid_to(bid, &mut bids);
+		Self::_add_bid_to(bid, &mut bids)?;
 
 		<BondBids<T>>::put(bids);
+		Ok(())
 	}
 
 	/// Add a bid to the queue, making sure to sort it from highest to lowest price.
+	///
 	/// Truncates the bids to `MaximumBids` to keep the queue bounded.
-	fn _add_bid_to(bid: Bid<T::AccountId>, bids: &mut Vec<Bid<T::AccountId>>) {
+	fn _add_bid_to(bid: Bid<T::AccountId>, bids: &mut Vec<Bid<T::AccountId>>) -> DispatchResult {
 		let index: usize = bids
 			// sort the bids from highest to lowest
 			.binary_search_by(|&Bid { price, .. }| bid.price.cmp(&price))
 			.unwrap_or_else(|i| i);
 		bids.insert(index, bid);
-		bids.truncate(T::MaximumBids::get());
+		while bids.len() > T::MaximumBids::get() {
+			if let Some(bid) = bids.pop() {
+				Self::refund_bid(&bid)?;
+			}
+		}
+		Ok(())
+	}
+
+	fn refund_bid(Bid {account, price_in_coins, ..}: &Bid<T::AccountId>) -> DispatchResult {
+		Self::add_balance(account, *price_in_coins)?;
+		Self::deposit_event(RawEvent::RefundedBid(account.clone(), *price_in_coins));
+		Ok(())
 	}
 
 	fn cancel_bids<F>(cancel_for: F)
@@ -335,7 +369,16 @@ impl<T: Trait> Module<T> {
 	{
 		let mut bids = Self::bond_bids();
 
-		bids.retain(|b| !cancel_for(b));
+		bids.retain(|b| {
+			if cancel_for(b) {
+				Self::refund_bid(b).unwrap_or_else(|e|{
+					native::error!("{:?}", e);
+					debug_assert!(false, "refund should not fail");
+				});
+				return false;
+			}
+			true
+		});
 
 		<BondBids<T>>::put(bids);
 	}
@@ -352,20 +395,14 @@ impl<T: Trait> Module<T> {
 				// safe from underflow because `price` is checked to be greater than `BASE_UNIT`
 				let fraction = Fixed64::from_rational(price as i64, BASE_UNIT) - Fixed64::from_natural(1);
 				let supply = Self::coin_supply();
-				let contract_by = fraction
-					.saturated_multiply_accumulate(supply)
-					.checked_sub(supply)
-					.ok_or(Error::<T>::GenericUnderflow)?;
+				let contract_by = saturated_mul(fraction, supply);
 				Self::contract_supply(contract_by)?;
 			},
 			price if price < BASE_UNIT => {
 				// safe from underflow because `price` is checked to be less than `BASE_UNIT`
 				let fraction = Fixed64::from_rational(BASE_UNIT as i64, price) - Fixed64::from_natural(1);
 				let supply = Self::coin_supply();
-				let expand_by = fraction
-					.saturated_multiply_accumulate(supply)
-					.checked_sub(supply)
-					.ok_or(Error::<T>::GenericUnderflow)?;
+				let expand_by = saturated_mul(fraction, supply);
 				Self::expand_supply(expand_by)?;
 			},
 			_ => {
@@ -396,7 +433,8 @@ impl<T: Trait> Module<T> {
 				new_bonds.push_back(Self::new_bond(bid.account.clone(), removed_quantity));
 				// re-add bid with reduced amount
 				if bid.price_in_coins > 0 && bid.quantity > 0 {
-					Self::_add_bid_to(bid, &mut bids);
+					// TODO: do we really want to return early on error here?
+					Self::_add_bid_to(bid, &mut bids)?;
 				} else if bid.price_in_coins != bid.quantity {
 					// if one of them is zero, both should be
 					return Err(DispatchError::from(Error::<T>::RoundingError));
@@ -418,7 +456,7 @@ impl<T: Trait> Module<T> {
 			.ok_or(Error::<T>::GenericUnderflow)?;
 		let new_supply = <CoinSupply>::get()
 			.checked_sub(burned)
-			.ok_or(Error::<T>::GenericUnderflow)?;
+			.ok_or(Error::<T>::CoinUnderflow)?;
 		for bond in new_bonds.iter() {
 			Self::deposit_event(RawEvent::NewBond(bond.account.clone(), bond.payout, bond.expiration));
 		}
@@ -469,10 +507,7 @@ impl<T: Trait> Module<T> {
 				remaining = remaining
 					.checked_sub(payout)
 					.ok_or(Error::<T>::GenericUnderflow)?;
-				<Balance<T>>::try_mutate(&account, |b: &mut u64| -> DispatchResult{
-					*b = b.checked_add(payout).ok_or(Error::<T>::GenericOverflow)?;
-					Ok(())
-				})?;
+				Self::add_balance(&account, payout)?;
 				Self::deposit_event(RawEvent::BondFulfilled(account, payout));
 			}
 			// bond covers the remaining amount --> update and finish up
@@ -480,10 +515,7 @@ impl<T: Trait> Module<T> {
 				let payout = payout
 					.checked_sub(remaining)
 					.ok_or(Error::<T>::GenericUnderflow)?;
-				<Balance<T>>::try_mutate(&account, |b: &mut u64| -> DispatchResult {
-					*b = b.checked_add(remaining).ok_or(Error::<T>::GenericOverflow)?;
-					Ok(())
-				})?;
+				Self::add_balance(&account, remaining)?;
 				Self::_add_bond(Bond {
 					account: account.clone(),
 					payout,
@@ -706,9 +738,9 @@ mod tests {
 		new_test_ext().execute_with(|| {
 			assert_ok!(Stablecoin::init(Origin::signed(1)));
 
-			Stablecoin::add_bid(Bid::new(1, Perbill::from_percent(25), 5 * BASE_UNIT));
-			Stablecoin::add_bid(Bid::new(1, Perbill::from_percent(33), 5 * BASE_UNIT));
-			Stablecoin::add_bid(Bid::new(1, Perbill::from_percent(50), 5 * BASE_UNIT));
+			assert_ok!(Stablecoin::add_bid(Bid::new(1, Perbill::from_percent(25), 5 * BASE_UNIT)));
+			assert_ok!(Stablecoin::add_bid(Bid::new(1, Perbill::from_percent(33), 5 * BASE_UNIT)));
+			assert_ok!(Stablecoin::add_bid(Bid::new(1, Perbill::from_percent(50), 5 * BASE_UNIT)));
 
 			let bids = Stablecoin::bond_bids();
 			let prices: Vec<_> = bids.into_iter().map(|Bid { price, .. }| price).collect();
@@ -729,10 +761,27 @@ mod tests {
 			assert_ok!(Stablecoin::init(Origin::signed(1)));
 
 			for _i in 0..(2 * MaximumBids::get()) {
-				Stablecoin::add_bid(Bid::new(1, Perbill::from_percent(25), 5 * BASE_UNIT));
+				assert_ok!(Stablecoin::add_bid(Bid::new(1, Perbill::from_percent(25), 5 * BASE_UNIT)));
 			}
 
 			assert_eq!(Stablecoin::bond_bids().len(), MaximumBids::get());
+		});
+	}
+
+	#[test]
+	fn truncated_bids_are_refunded() {
+		new_test_ext().execute_with(|| {
+			assert_ok!(Stablecoin::init(Origin::signed(1)));
+
+			let price = Perbill::from_percent(25);
+			let payout = Fixed64::from_natural(MINIMUM_BOND_PAYOUT);
+			for _i in 0..(MaximumBids::get() + 1) {
+				assert_ok!(Stablecoin::bid_for_bond(Origin::signed(1), price, payout));
+			}
+
+			assert_eq!(Stablecoin::bond_bids().len(), MaximumBids::get());
+			let expected = COIN_SUPPLY - price * saturated_mul(payout, BASE_UNIT) * (MaximumBids::get() as u64);
+			assert_eq!(Stablecoin::get_balance(1), expected);
 		});
 	}
 
@@ -741,10 +790,10 @@ mod tests {
 		new_test_ext().execute_with(|| {
 			assert_ok!(Stablecoin::init(Origin::signed(1)));
 
-			Stablecoin::add_bid(Bid::new(1, Perbill::from_percent(25), 5 * BASE_UNIT));
-			Stablecoin::add_bid(Bid::new(2, Perbill::from_percent(33), 5 * BASE_UNIT));
-			Stablecoin::add_bid(Bid::new(1, Perbill::from_percent(50), 5 * BASE_UNIT));
-			Stablecoin::add_bid(Bid::new(3, Perbill::from_percent(50), 5 * BASE_UNIT));
+			assert_ok!(Stablecoin::add_bid(Bid::new(1, Perbill::from_percent(25), 5 * BASE_UNIT)));
+			assert_ok!(Stablecoin::add_bid(Bid::new(2, Perbill::from_percent(33), 5 * BASE_UNIT)));
+			assert_ok!(Stablecoin::add_bid(Bid::new(1, Perbill::from_percent(50), 5 * BASE_UNIT)));
+			assert_ok!(Stablecoin::add_bid(Bid::new(3, Perbill::from_percent(50), 5 * BASE_UNIT)));
 			assert_eq!(Stablecoin::bond_bids().len(), 4);
 
 			assert_ok!(Stablecoin::cancel_all_bids(Origin::signed(1)));
@@ -762,11 +811,11 @@ mod tests {
 		new_test_ext().execute_with(|| {
 			assert_ok!(Stablecoin::init(Origin::signed(1)));
 
-			Stablecoin::add_bid(Bid::new(1, Perbill::from_percent(25), 5 * BASE_UNIT));
-			Stablecoin::add_bid(Bid::new(2, Perbill::from_percent(33), 5 * BASE_UNIT));
-			Stablecoin::add_bid(Bid::new(1, Perbill::from_percent(45), 5 * BASE_UNIT));
-			Stablecoin::add_bid(Bid::new(1, Perbill::from_percent(50), 5 * BASE_UNIT));
-			Stablecoin::add_bid(Bid::new(3, Perbill::from_percent(55), 5 * BASE_UNIT));
+			assert_ok!(Stablecoin::add_bid(Bid::new(1, Perbill::from_percent(25), 5 * BASE_UNIT)));
+			assert_ok!(Stablecoin::add_bid(Bid::new(2, Perbill::from_percent(33), 5 * BASE_UNIT)));
+			assert_ok!(Stablecoin::add_bid(Bid::new(1, Perbill::from_percent(45), 5 * BASE_UNIT)));
+			assert_ok!(Stablecoin::add_bid(Bid::new(1, Perbill::from_percent(50), 5 * BASE_UNIT)));
+			assert_ok!(Stablecoin::add_bid(Bid::new(3, Perbill::from_percent(55), 5 * BASE_UNIT)));
 			assert_eq!(Stablecoin::bond_bids().len(), 5);
 
 			assert_ok!(Stablecoin::cancel_bids_at_or_below(
@@ -1006,8 +1055,8 @@ mod tests {
 				.checked_mul(&BASE_UNIT.into())
 				.map(|r| r.to_integer())
 				.unwrap();
-			Stablecoin::add_bid(Bid::new(1, Perbill::from_percent(80), bond_amount));
-			Stablecoin::add_bid(Bid::new(2, Perbill::from_percent(75), 2 * BASE_UNIT));
+			assert_ok!(Stablecoin::add_bid(Bid::new(1, Perbill::from_percent(80), bond_amount)));
+			assert_ok!(Stablecoin::add_bid(Bid::new(2, Perbill::from_percent(75), 2 * BASE_UNIT)));
 
 			let prev_supply = Stablecoin::coin_supply();
 			let amount = 2 * BASE_UNIT;
@@ -1016,9 +1065,7 @@ mod tests {
 			let bids = Stablecoin::bond_bids();
 			let bonds = Stablecoin::bonds();
 			assert_eq!(bids.len(), 1, "exactly one bid should have been removed");
-			let remainging_bid_quantity = Fixed64::from_rational(667, 1_000)
-				.saturated_multiply_accumulate(BASE_UNIT)
-				.saturating_sub(BASE_UNIT);
+			let remainging_bid_quantity = saturated_mul(Fixed64::from_rational(667, 1_000), BASE_UNIT);
 			assert_eq!(
 				bids[0],
 				Bid::new(2, Perbill::from_percent(75), remainging_bid_quantity)
