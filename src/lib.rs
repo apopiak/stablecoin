@@ -417,14 +417,14 @@ impl<T: Trait> Module<T> {
 				let fraction = Fixed64::from_rational(price as i64, T::BaseUnit::get()) - Fixed64::from_natural(1);
 				let supply = Self::coin_supply();
 				let contract_by = saturated_mul(fraction, supply);
-				Self::contract_supply(contract_by)?;
+				Self::contract_supply(supply, contract_by)?;
 			}
 			price if price < T::BaseUnit::get() => {
 				// safe from underflow because `price` is checked to be less than `BaseUnit`
 				let fraction = Fixed64::from_rational(T::BaseUnit::get() as i64, price) - Fixed64::from_natural(1);
 				let supply = Self::coin_supply();
 				let expand_by = saturated_mul(fraction, supply);
-				Self::expand_supply(expand_by)?;
+				Self::expand_supply(supply, expand_by)?;
 			}
 			_ => {
 				native::info!("coin price is equal to base as is desired --> nothing to do");
@@ -436,9 +436,8 @@ impl<T: Trait> Module<T> {
 	/// Tries to contract the supply by `amount` by converting bids to bonds.
 	/// 
 	/// Note: Could contract the supply by less than `amount` if there are not enough bids.
-	fn contract_supply(amount: Coins) -> DispatchResult {
+	fn contract_supply(coin_supply: Coins, amount: Coins) -> DispatchResult {
 		// Checking whether coin supply would underflow.
-		let coin_supply = Self::coin_supply();
 		let remaining_supply = coin_supply
 			.checked_sub(amount)
 			.ok_or(Error::<T>::CoinSupplyUnderflow)?;
@@ -513,9 +512,8 @@ impl<T: Trait> Module<T> {
 	/// 
 	/// Will first pay out bonds and only pay out shares if there are no remaining
 	/// bonds.
-	fn expand_supply(amount: Coins) -> DispatchResult {
+	fn expand_supply(coin_supply: Coins, amount: Coins) -> DispatchResult {
 		// Checking whether the supply will overflow.
-		let coin_supply = Self::coin_supply();
 		coin_supply
 			.checked_add(amount)
 			.ok_or(Error::<T>::CoinSupplyOverflow)?;
@@ -980,7 +978,7 @@ mod tests {
 			let prev_supply = Stablecoin::coin_supply();
 			// set blocknumber past expiration time
 			System::set_block_number(System::block_number() + ExpirationPeriod::get());
-			assert_ok!(Stablecoin::expand_supply(42));
+			assert_ok!(Stablecoin::expand_supply(prev_supply, 42));
 			let acc_balance = Stablecoin::get_balance(acc);
 			assert_eq!(
 				prev_acc_balance, acc_balance,
@@ -1040,7 +1038,7 @@ mod tests {
 			System::set_block_number(System::block_number() + 1);
 			// expand the supply, only hitting the last bond that was added to the queue, but not fully filling it
 			let new_coins = 1;
-			assert_ok!(Stablecoin::expand_supply(new_coins));
+			assert_ok!(Stablecoin::expand_supply(prev_supply, new_coins));
 			// make sure there is only three bond left (the first one expired, the second one got consumed)
 			assert_eq!(Stablecoin::bonds().len(), 3);
 			// make sure the first account's balance hasn't moved
@@ -1060,7 +1058,7 @@ mod tests {
 
 			// try to expand_supply, expected to fail because all bonds have expired
 			let new_coins = 42;
-			assert_ok!(Stablecoin::expand_supply(new_coins));
+			assert_ok!(Stablecoin::expand_supply(intermediate_supply, new_coins));
 
 			// make sure there are no bonds left (they have all expired)
 			assert_eq!(Stablecoin::bonds().len(), 0);
@@ -1222,7 +1220,7 @@ mod tests {
 
 			let prev_supply = Stablecoin::coin_supply();
 			let amount = 13 * BaseUnit::get();
-			assert_ok!(Stablecoin::expand_supply(amount));
+			assert_ok!(Stablecoin::expand_supply(prev_supply, amount));
 
 			let amount_per_acc = InitialSupply::get() / 10 + BaseUnit::get() / 10;
 			assert_eq!(Stablecoin::get_balance(1), amount_per_acc);
@@ -1266,7 +1264,7 @@ mod tests {
 
 			let prev_supply = Stablecoin::coin_supply();
 			let amount = 2 * BaseUnit::get();
-			assert_ok!(Stablecoin::contract_supply(amount));
+			assert_ok!(Stablecoin::contract_supply(prev_supply, amount));
 
 			let bids = Stablecoin::bond_bids();
 			let bonds = Stablecoin::bonds();
