@@ -240,11 +240,11 @@ decl_module! {
 			let len = shareholders.len();
 			// give one share to each shareholder
 			let shares: Vec<(T::AccountId, u64)> = shareholders.into_iter().zip(iter::repeat(1).take(len)).collect();
+			
+			Self::hand_out_coins_to_shareholders(&shares, T::InitialSupply::get(), Self::coin_supply())?;
+			
 			<Shares<T>>::put(shares);
 			<ShareSupply>::put(len as u64);
-			
-			Self::hand_out_coins_to_shareholders(T::InitialSupply::get(), Self::coin_supply())?;
-			
 			<Init>::put(true);
 
 			Self::deposit_event(RawEvent::Initialized(founder));
@@ -563,7 +563,7 @@ impl<T: Trait> Module<T> {
 		<CoinSupply>::put(new_supply);
 		<Bonds<T>>::put(bonds);
 		if remaining > 0 {
-			Self::hand_out_coins_to_shareholders(remaining, new_supply)?;
+			Self::hand_out_coins_to_shareholders(&Self::shares(), remaining, new_supply)?;
 		}
 		Self::deposit_event(RawEvent::ExpandedSupply(amount));
 		Ok(())
@@ -572,19 +572,18 @@ impl<T: Trait> Module<T> {
 	// Will hand out coins to shareholders according to their number of shares.
 	// Will hand out more coins to shareholders at the beginning of the list
 	// if the handout cannot be equal.
-	fn hand_out_coins_to_shareholders(amount: Coins, coin_supply: Coins) -> DispatchResult {
+	fn hand_out_coins_to_shareholders(shares: &[(T::AccountId, u64)], amount: Coins, coin_supply: Coins) -> DispatchResult {
 		// Checking whether the supply will overflow.
 		coin_supply
 			.checked_add(amount)
 			.ok_or(Error::<T>::CoinSupplyOverflow)?;
 
-		let share_supply = Self::share_supply();
-		let shares = Self::shares();
+		let share_supply: u64 = shares.iter().map(|(_a, s)| s).sum();
 		let len = shares.len() as u64;
 		let coins_per_share = max(1, amount / share_supply);
 		let pay_extra = coins_per_share * len < amount;
 		let mut amount_payed = 0;
-		for (i, (acc, num_shares)) in shares.into_iter().enumerate() {
+		for (i, (acc, num_shares)) in shares.iter().enumerate() {
 			if amount_payed >= amount {
 				break;
 			}
@@ -1093,7 +1092,7 @@ mod tests {
 			assert_eq!(Stablecoin::get_balance(10), InitialSupply::get() / 10);
 
 			let amount = 30 * BaseUnit::get();
-			assert_ok!(Stablecoin::hand_out_coins_to_shareholders(amount, Stablecoin::coin_supply()));
+			assert_ok!(Stablecoin::hand_out_coins_to_shareholders(&Stablecoin::shares(), amount, Stablecoin::coin_supply()));
 
 			let amount_per_acc = 3 * BaseUnit::get();
 			assert_eq!(Stablecoin::get_balance(1), InitialSupply::get() / 10 + amount_per_acc);
@@ -1115,7 +1114,7 @@ mod tests {
 			assert_eq!(Stablecoin::get_balance(10), InitialSupply::get() / 10);
 
 			let amount = 8;
-			assert_ok!(Stablecoin::hand_out_coins_to_shareholders(amount, Stablecoin::coin_supply()));
+			assert_ok!(Stablecoin::hand_out_coins_to_shareholders(&Stablecoin::shares(), amount, Stablecoin::coin_supply()));
 
 			let amount_per_acc = 1;
 			assert_eq!(Stablecoin::get_balance(1), InitialSupply::get() / 10 + amount_per_acc);
@@ -1139,7 +1138,7 @@ mod tests {
 			assert_eq!(Stablecoin::get_balance(10), InitialSupply::get() / 10);
 
 			let amount = 13;
-			assert_ok!(Stablecoin::hand_out_coins_to_shareholders(amount, Stablecoin::coin_supply()));
+			assert_ok!(Stablecoin::hand_out_coins_to_shareholders(&Stablecoin::shares(), amount, Stablecoin::coin_supply()));
 
 			let amount_per_acc = 1;
 			assert_eq!(Stablecoin::get_balance(1), InitialSupply::get() / 10 + amount_per_acc + 1);
@@ -1182,7 +1181,7 @@ mod tests {
 				// this assert might actually produce a false positive
 				// as there might be errors returned that are the correct
 				// behavior for the given parameters
-				assert_ok!(Stablecoin::hand_out_coins_to_shareholders(amount, Stablecoin::coin_supply()));
+				assert_ok!(Stablecoin::hand_out_coins_to_shareholders(&Stablecoin::shares(), amount, Stablecoin::coin_supply()));
 
 				let len = len as u64;
 				let payout = amount;
