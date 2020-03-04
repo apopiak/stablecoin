@@ -188,7 +188,7 @@ decl_storage! {
 		ShareSupply get(fn share_supply): u64;
 		Shares get(fn shares): Vec<(T::AccountId, u64)>;
 
-		Balance get(fn get_balance): map hasher(blake2_256) T::AccountId => Coins;
+		Balance get(fn get_balance): map hasher(blake2_128_concat) T::AccountId => Coins;
 		CoinSupply get(fn coin_supply): Coins;
 
 		// TODO: limit the maximum bond size
