@@ -728,10 +728,12 @@ mod tests {
 	// This function basically just builds a genesis storage key/value store according to
 	// our desired mockup.
 	fn new_test_ext() -> sp_io::TestExternalities {
-		system::GenesisConfig::default()
+		let mut storage = system::GenesisConfig::default()
 			.build_storage::<Test>()
-			.unwrap()
-			.into()
+			.unwrap();
+		// make sure to run our storage build function to check config
+		let _ = GenesisConfig::default().assimilate_storage::<Test>(&mut storage);
+		storage.into()
 	}
 
 	// ------------------------------------------------------------
