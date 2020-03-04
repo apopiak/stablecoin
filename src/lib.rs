@@ -19,7 +19,6 @@ use num_rational::Ratio;
 use sp_runtime::{traits::CheckedMul, Fixed64, PerThing, Perbill};
 use sp_std::collections::vec_deque::VecDeque;
 use sp_std::iter;
-use static_assertions::const_assert;
 use system::ensure_signed;
 
 mod utils;
@@ -32,6 +31,9 @@ pub trait FetchPrice<Balance> {
 	fn fetch_price() -> Balance;
 }
 
+/// The type used to represent the account balance for the stablecoin.
+pub type Coins = u64;
+
 /// The pallet's configuration trait.
 pub trait Trait: system::Trait {
 	/// The overarching event type.
@@ -39,28 +41,20 @@ pub trait Trait: system::Trait {
 
 	/// The amount of coins necessary to buy the tracked value.
 	type CoinPrice: FetchPrice<Coins>;
-
 	/// The expiration time of a bond.
 	type ExpirationPeriod: Get<<Self as system::Trait>::BlockNumber>;
-
 	/// The maximum amount of bids allowed in the queue. Used to prevent the queue from growing forever.
 	type MaximumBids: Get<usize>;
-	/// How often adjustments should be made based on the price
+	/// The frequency of adjustments of the coin supply.
 	type AdjustmentFrequency: Get<<Self as system::Trait>::BlockNumber>;
+	/// The amount of Coins that are meant to track the value. Example: A value of 1000 when tracking
+	/// Dollars means that the Stablecoin will try to maintain a price of 1000 Coins for 1$.
+	type BaseUnit: Get<Coins>;
+	/// The initial supply of Coins.
+	type InitialSupply: Get<Coins>;
+	/// The minimum amount of Coins in circulation.
+	type MinimumSupply: Get<Coins>;
 }
-
-/// The type used to represent the account balance for the stablecoin.
-pub type Coins = u64;
-
-// 1000 units are supposed to represent $1 USD or whatever is being tracked.
-const BASE_UNIT: Coins = 1000;
-
-// Total supply of coins. Set to 100 coins (100$ USD here).
-const COIN_SUPPLY: Coins = BASE_UNIT * 100;
-
-// Minimum amount of coins in circulation.
-const MINIMUM_COIN_SUPPLY: Coins = BASE_UNIT;
-const_assert!(MINIMUM_COIN_SUPPLY < COIN_SUPPLY);
 
 // Number of Share tokens, fixed at genesis.
 const SHARE_SUPPLY: u64 = 100;
@@ -180,7 +174,6 @@ impl<T: Trait> From<BidError> for Error<T> {
 // This pallet's storage items.
 decl_storage! {
 	trait Store for Module<T: Trait> as Stablecoin {
-		BaseUnit get(fn base_unit): Coins = BASE_UNIT;
 		MinimumBondPrice get(fn minimum_bond_price): Perbill = MINIMUM_BOND_PRICE;
 
 		Init get(fn initialized): bool = false;
@@ -195,6 +188,14 @@ decl_storage! {
 		Bonds get(fn bonds): VecDeque<Bond<T::AccountId, T::BlockNumber>>;
 
 		BondBids get(fn bond_bids): Vec<Bid<T::AccountId>>;
+	}
+	add_extra_genesis {
+		build(|_config: &GenesisConfig| {
+			assert!(
+				T::MinimumSupply::get() < T::InitialSupply::get(), 
+				"initial coin supply needs to be greater than the minimum"
+			);
+		});
 	}
 }
 
@@ -216,8 +217,8 @@ decl_module! {
 			<Shares<T>>::put(vec![(founder.clone(), SHARE_SUPPLY)]);
 			<ShareSupply>::put(SHARE_SUPPLY);
 
-			<Balance<T>>::insert(&founder, COIN_SUPPLY);
-			<CoinSupply>::put(COIN_SUPPLY);
+			<Balance<T>>::insert(&founder, T::InitialSupply::get());
+			<CoinSupply>::put(T::InitialSupply::get());
 
 			<Init>::put(true);
 
@@ -241,9 +242,9 @@ decl_module! {
 			let shares: Vec<(T::AccountId, u64)> = shareholders.into_iter().zip(iter::repeat(1).take(len)).collect();
 			<Shares<T>>::put(shares);
 			<ShareSupply>::put(len as u64);
-
-			Self::hand_out_coins_to_shareholders(COIN_SUPPLY)?;
-
+			
+			Self::hand_out_coins_to_shareholders(T::InitialSupply::get(), Self::coin_supply())?;
+			
 			<Init>::put(true);
 
 			Self::deposit_event(RawEvent::Initialized(founder));
@@ -273,17 +274,17 @@ decl_module! {
 		/// Bid for `quantity` coins at a price of `price_per_bond`.
 		///
 		/// Price is a fraction of the desired payout quantity.
-		/// Expects a `quantity` of a least `BASE_UNIT`.
+		/// Expects a `quantity` of a least `BaseUnit`.
 		///
-		/// Example: `bid_for_bond(origin, Perbill::from_percent(80), 5 * BASE_UNIT)` will bid
-		/// for a bond with a payout of `5 * BASE_UNIT` coins for a price of
-		/// `0.8 * 5 * BASE_UNIT = 4 * BASE_UNIT` coins.
+		/// Example: `bid_for_bond(origin, Perbill::from_percent(80), 5 * BaseUnit)` will bid
+		/// for a bond with a payout of `5 * BaseUnit` coins for a price of
+		/// `0.8 * 5 * BaseUnit = 4 * BaseUnit` coins.
 		pub fn bid_for_bond(origin, price_per_bond: Perbill, quantity: Coins) -> DispatchResult {
 			let who = ensure_signed(origin)?;
 
 			ensure!(price_per_bond <= Perbill::from_percent(100), "price cannot be higher than 100%");
 			ensure!(price_per_bond > MINIMUM_BOND_PRICE, "price is lower than the minimum bond price");
-			ensure!(quantity >= BASE_UNIT, "quantity is lower than the base unit");
+			ensure!(quantity >= T::BaseUnit::get(), "quantity is lower than the base unit");
 
 			let bid = Bid::new(who.clone(), price_per_bond, quantity);
 
@@ -346,6 +347,7 @@ impl<T: Trait> Module<T> {
 		Ok(())
 	}
 
+	/// Add a bid to the queue.
 	fn add_bid(bid: Bid<T::AccountId>) -> DispatchResult {
 		let mut bids = Self::bond_bids();
 
@@ -355,7 +357,7 @@ impl<T: Trait> Module<T> {
 		Ok(())
 	}
 
-	/// Add a bid to the queue, making sure to sort it from highest to lowest price.
+	/// Add a bid to the given queue, making sure to sort it from highest to lowest price.
 	///
 	/// Truncates the bids to `MaximumBids` to keep the queue bounded.
 	// TODO: use priority queue (binaryheap?)
@@ -375,12 +377,14 @@ impl<T: Trait> Module<T> {
 		Ok(())
 	}
 
+	/// Refund the coins payed for `bid` to it account.
 	fn refund_bid(bid: &Bid<T::AccountId>) -> DispatchResult {
 		Self::add_balance(&bid.account, bid.payment())?;
 		Self::deposit_event(RawEvent::RefundedBid(bid.account.clone(), bid.payment()));
 		Ok(())
 	}
 
+	/// Cancel all bids where `cancel_for` returns true and refund the bidders.
 	fn cancel_bids<F>(cancel_for: F)
 	where
 		F: Fn(&Bid<T::AccountId>) -> bool,
@@ -408,16 +412,16 @@ impl<T: Trait> Module<T> {
 				native::error!("coin price is zero!");
 				return Err(DispatchError::from(Error::<T>::ZeroPrice));
 			}
-			price if price > BASE_UNIT => {
-				// safe from underflow because `price` is checked to be greater than `BASE_UNIT`
-				let fraction = Fixed64::from_rational(price as i64, BASE_UNIT) - Fixed64::from_natural(1);
+			price if price > T::BaseUnit::get() => {
+				// safe from underflow because `price` is checked to be greater than `BaseUnit`
+				let fraction = Fixed64::from_rational(price as i64, T::BaseUnit::get()) - Fixed64::from_natural(1);
 				let supply = Self::coin_supply();
 				let contract_by = saturated_mul(fraction, supply);
 				Self::contract_supply(contract_by)?;
 			}
-			price if price < BASE_UNIT => {
-				// safe from underflow because `price` is checked to be less than `BASE_UNIT`
-				let fraction = Fixed64::from_rational(BASE_UNIT as i64, price) - Fixed64::from_natural(1);
+			price if price < T::BaseUnit::get() => {
+				// safe from underflow because `price` is checked to be less than `BaseUnit`
+				let fraction = Fixed64::from_rational(T::BaseUnit::get() as i64, price) - Fixed64::from_natural(1);
 				let supply = Self::coin_supply();
 				let expand_by = saturated_mul(fraction, supply);
 				Self::expand_supply(expand_by)?;
@@ -429,13 +433,16 @@ impl<T: Trait> Module<T> {
 		Ok(())
 	}
 
+	/// Tries to contract the supply by `amount` by converting bids to bonds.
+	/// 
+	/// Note: Could contract the supply by less than `amount` if there are not enough bids.
 	fn contract_supply(amount: Coins) -> DispatchResult {
 		// Checking whether coin supply would underflow.
 		let coin_supply = Self::coin_supply();
 		let remaining_supply = coin_supply
 			.checked_sub(amount)
 			.ok_or(Error::<T>::CoinSupplyUnderflow)?;
-		if remaining_supply < MINIMUM_COIN_SUPPLY {
+		if remaining_supply < T::MinimumSupply::get() {
 			return Err(DispatchError::from(Error::<T>::CoinSupplyUnderflow));
 		}
 		let mut bids = Self::bond_bids();
@@ -483,6 +490,10 @@ impl<T: Trait> Module<T> {
 		Ok(())
 	}
 
+	/// Create a new bond for the given `account` with the given `payout`.
+	/// 
+	/// Expiration is calculated based on the current `block_number` and the configured
+	/// `ExpirationPeriod`.
 	fn new_bond(account: T::AccountId, payout: Coins) -> Bond<T::AccountId, T::BlockNumber> {
 		let expiration = <system::Module<T>>::block_number() + T::ExpirationPeriod::get();
 		Bond {
@@ -498,6 +509,10 @@ impl<T: Trait> Module<T> {
 		<Bonds<T>>::put(bonds);
 	}
 
+	/// Expand the supply by `amount` by paying out bonds and shares.
+	/// 
+	/// Will first pay out bonds and only pay out shares if there are no remaining
+	/// bonds.
 	fn expand_supply(amount: Coins) -> DispatchResult {
 		// Checking whether the supply will overflow.
 		let coin_supply = Self::coin_supply();
@@ -550,7 +565,7 @@ impl<T: Trait> Module<T> {
 		<CoinSupply>::put(new_supply);
 		<Bonds<T>>::put(bonds);
 		if remaining > 0 {
-			Self::hand_out_coins_to_shareholders(remaining)?;
+			Self::hand_out_coins_to_shareholders(remaining, new_supply)?;
 		}
 		Self::deposit_event(RawEvent::ExpandedSupply(amount));
 		Ok(())
@@ -559,17 +574,16 @@ impl<T: Trait> Module<T> {
 	// Will hand out coins to shareholders according to their number of shares.
 	// Will hand out more coins to shareholders at the beginning of the list
 	// if the handout cannot be equal.
-	fn hand_out_coins_to_shareholders(amount: Coins) -> DispatchResult {
+	fn hand_out_coins_to_shareholders(amount: Coins, coin_supply: Coins) -> DispatchResult {
 		// Checking whether the supply will overflow.
-		let coin_supply = Self::coin_supply();
 		coin_supply
 			.checked_add(amount)
 			.ok_or(Error::<T>::CoinSupplyOverflow)?;
 
-		let supply = Self::share_supply();
+		let share_supply = Self::share_supply();
 		let shares = Self::shares();
 		let len = shares.len() as u64;
-		let coins_per_share = max(1, amount / supply);
+		let coins_per_share = max(1, amount / share_supply);
 		let pay_extra = coins_per_share * len < amount;
 		let mut amount_payed = 0;
 		for (i, (acc, num_shares)) in shares.into_iter().enumerate() {
@@ -599,6 +613,7 @@ impl<T: Trait> Module<T> {
 		Ok(())
 	}
 
+	/// Contracts or expands the supply based on conditions.
 	fn on_block_with_price(block: T::BlockNumber, price: Coins) -> DispatchResult {
 		// This can be changed to only correct for small or big price swings.
 		if block % T::AdjustmentFrequency::get() == 0.into() {
@@ -633,6 +648,7 @@ mod tests {
 		pub enum Origin for Test {}
 	}
 
+	const BASE_UNIT: u64 = 1000;
 	static LAST_PRICE: AtomicU64 = AtomicU64::new(BASE_UNIT);
 	pub struct RandomPrice;
 
@@ -668,6 +684,9 @@ mod tests {
 		pub const MaximumBids: usize = 10;
 		// adjust supply every second block
 		pub const AdjustmentFrequency: u64 = 2;
+		pub const BaseUnit: u64 = BASE_UNIT;
+		pub const InitialSupply: u64 = 100 * BaseUnit::get();
+		pub const MinimumSupply: u64 = BaseUnit::get();
 	}
 
 	impl system::Trait for Test {
@@ -698,6 +717,9 @@ mod tests {
 		type ExpirationPeriod = ExpirationPeriod;
 		type MaximumBids = MaximumBids;
 		type AdjustmentFrequency = AdjustmentFrequency;
+		type BaseUnit = BaseUnit;
+		type InitialSupply = InitialSupply;
+		type MinimumSupply = MinimumSupply;
 	}
 
 	type System = system::Module<Test>;
@@ -723,7 +745,7 @@ mod tests {
 			let amount = 42;
 			assert_ok!(Stablecoin::transfer(Origin::signed(1), 2, amount));
 
-			assert_eq!(Stablecoin::get_balance(1), COIN_SUPPLY - amount);
+			assert_eq!(Stablecoin::get_balance(1), InitialSupply::get() - amount);
 			assert_eq!(Stablecoin::get_balance(2), amount);
 		});
 	}
@@ -762,7 +784,7 @@ mod tests {
 		new_test_ext().execute_with(|| {
 			assert_ok!(Stablecoin::init(Origin::signed(1)));
 
-			let bid_amount = 5 * BASE_UNIT;
+			let bid_amount = 5 * BaseUnit::get();
 			assert_ok!(Stablecoin::add_bid(Bid::new(
 				1,
 				Perbill::from_percent(25),
@@ -797,7 +819,7 @@ mod tests {
 		new_test_ext().execute_with(|| {
 			assert_ok!(Stablecoin::init(Origin::signed(1)));
 
-			let bid_amount = 5 * BASE_UNIT;
+			let bid_amount = 5 * BaseUnit::get();
 			for _i in 0..(2 * MaximumBids::get()) {
 				assert_ok!(Stablecoin::add_bid(Bid::new(
 					1,
@@ -816,13 +838,13 @@ mod tests {
 			assert_ok!(Stablecoin::init(Origin::signed(1)));
 
 			let price = Perbill::from_percent(25);
-			let quantity = BASE_UNIT;
+			let quantity = BaseUnit::get();
 			for _i in 0..(MaximumBids::get() + 1) {
 				assert_ok!(Stablecoin::bid_for_bond(Origin::signed(1), price, quantity));
 			}
 
 			assert_eq!(Stablecoin::bond_bids().len(), MaximumBids::get());
-			let expected = COIN_SUPPLY - price * quantity * (MaximumBids::get() as u64);
+			let expected = InitialSupply::get() - price * quantity * (MaximumBids::get() as u64);
 			assert_eq!(Stablecoin::get_balance(1), expected);
 		});
 	}
@@ -832,7 +854,7 @@ mod tests {
 		new_test_ext().execute_with(|| {
 			assert_ok!(Stablecoin::init(Origin::signed(1)));
 
-			let bid_amount = 5 * BASE_UNIT;
+			let bid_amount = 5 * BaseUnit::get();
 			assert_ok!(Stablecoin::add_bid(Bid::new(
 				1,
 				Perbill::from_percent(25),
@@ -870,7 +892,7 @@ mod tests {
 		new_test_ext().execute_with(|| {
 			assert_ok!(Stablecoin::init(Origin::signed(1)));
 
-			let bid_amount = 5 * BASE_UNIT;
+			let bid_amount = 5 * BaseUnit::get();
 			assert_ok!(Stablecoin::add_bid(Bid::new(
 				1,
 				Perbill::from_percent(25),
@@ -927,7 +949,7 @@ mod tests {
 
 			Stablecoin::_add_bond(Stablecoin::new_bond(
 				3,
-				Fixed64::from_rational(20, 100).saturated_multiply_accumulate(BASE_UNIT),
+				Fixed64::from_rational(20, 100).saturated_multiply_accumulate(BaseUnit::get()),
 			));
 
 			let bonds = Stablecoin::bonds();
@@ -945,7 +967,7 @@ mod tests {
 			let prev_acc_balance = Stablecoin::get_balance(acc);
 			Stablecoin::_add_bond(Stablecoin::new_bond(
 				acc,
-				Fixed64::from_rational(20, 100).saturated_multiply_accumulate(BASE_UNIT),
+				Fixed64::from_rational(20, 100).saturated_multiply_accumulate(BaseUnit::get()),
 			));
 
 			let bonds = Stablecoin::bonds();
@@ -978,7 +1000,7 @@ mod tests {
 			let prev_first_acc_balance = Stablecoin::get_balance(first_acc);
 			Stablecoin::_add_bond(Stablecoin::new_bond(
 				first_acc,
-				Fixed64::from_rational(20, 100).saturated_multiply_accumulate(BASE_UNIT),
+				Fixed64::from_rational(20, 100).saturated_multiply_accumulate(BaseUnit::get()),
 			));
 
 			let bonds = Stablecoin::bonds();
@@ -994,20 +1016,20 @@ mod tests {
 			// Add a new bond
 			Stablecoin::_add_bond(Stablecoin::new_bond(
 				second_acc,
-				Fixed64::from_rational(20, 100).saturated_multiply_accumulate(BASE_UNIT),
+				Fixed64::from_rational(20, 100).saturated_multiply_accumulate(BaseUnit::get()),
 			));
 			Stablecoin::_add_bond(Stablecoin::new_bond(
 				second_acc,
-				Fixed64::from_rational(20, 100).saturated_multiply_accumulate(BASE_UNIT),
+				Fixed64::from_rational(20, 100).saturated_multiply_accumulate(BaseUnit::get()),
 			));
 			Stablecoin::_add_bond(Stablecoin::new_bond(
 				second_acc,
-				Fixed64::from_rational(20, 100).saturated_multiply_accumulate(BASE_UNIT),
+				Fixed64::from_rational(20, 100).saturated_multiply_accumulate(BaseUnit::get()),
 			));
 			// Note: this one is from first_acc
 			Stablecoin::_add_bond(Stablecoin::new_bond(
 				first_acc,
-				Fixed64::from_rational(20, 100).saturated_multiply_accumulate(BASE_UNIT),
+				Fixed64::from_rational(20, 100).saturated_multiply_accumulate(BaseUnit::get()),
 			));
 
 			// check bonds length
@@ -1067,18 +1089,18 @@ mod tests {
 				Origin::signed(1),
 				vec![1, 2, 3, 4, 5, 6, 7, 8, 9, 10]
 			));
-			assert_eq!(Stablecoin::get_balance(1), COIN_SUPPLY / 10);
-			assert_eq!(Stablecoin::get_balance(10), COIN_SUPPLY / 10);
+			assert_eq!(Stablecoin::get_balance(1), InitialSupply::get() / 10);
+			assert_eq!(Stablecoin::get_balance(10), InitialSupply::get() / 10);
 
-			let amount = 30 * BASE_UNIT;
-			assert_ok!(Stablecoin::hand_out_coins_to_shareholders(amount));
+			let amount = 30 * BaseUnit::get();
+			assert_ok!(Stablecoin::hand_out_coins_to_shareholders(amount, Stablecoin::coin_supply()));
 
-			let amount_per_acc = 3 * BASE_UNIT;
-			assert_eq!(Stablecoin::get_balance(1), COIN_SUPPLY / 10 + amount_per_acc);
-			assert_eq!(Stablecoin::get_balance(2), COIN_SUPPLY / 10 + amount_per_acc);
-			assert_eq!(Stablecoin::get_balance(3), COIN_SUPPLY / 10 + amount_per_acc);
-			assert_eq!(Stablecoin::get_balance(7), COIN_SUPPLY / 10 + amount_per_acc);
-			assert_eq!(Stablecoin::get_balance(10), COIN_SUPPLY / 10 + amount_per_acc);
+			let amount_per_acc = 3 * BaseUnit::get();
+			assert_eq!(Stablecoin::get_balance(1), InitialSupply::get() / 10 + amount_per_acc);
+			assert_eq!(Stablecoin::get_balance(2), InitialSupply::get() / 10 + amount_per_acc);
+			assert_eq!(Stablecoin::get_balance(3), InitialSupply::get() / 10 + amount_per_acc);
+			assert_eq!(Stablecoin::get_balance(7), InitialSupply::get() / 10 + amount_per_acc);
+			assert_eq!(Stablecoin::get_balance(10), InitialSupply::get() / 10 + amount_per_acc);
 		});
 	}
 
@@ -1089,20 +1111,20 @@ mod tests {
 				Origin::signed(1),
 				vec![1, 2, 3, 4, 5, 6, 7, 8, 9, 10]
 			));
-			assert_eq!(Stablecoin::get_balance(1), COIN_SUPPLY / 10);
-			assert_eq!(Stablecoin::get_balance(10), COIN_SUPPLY / 10);
+			assert_eq!(Stablecoin::get_balance(1), InitialSupply::get() / 10);
+			assert_eq!(Stablecoin::get_balance(10), InitialSupply::get() / 10);
 
 			let amount = 8;
-			assert_ok!(Stablecoin::hand_out_coins_to_shareholders(amount));
+			assert_ok!(Stablecoin::hand_out_coins_to_shareholders(amount, Stablecoin::coin_supply()));
 
 			let amount_per_acc = 1;
-			assert_eq!(Stablecoin::get_balance(1), COIN_SUPPLY / 10 + amount_per_acc);
-			assert_eq!(Stablecoin::get_balance(2), COIN_SUPPLY / 10 + amount_per_acc);
-			assert_eq!(Stablecoin::get_balance(3), COIN_SUPPLY / 10 + amount_per_acc);
-			assert_eq!(Stablecoin::get_balance(7), COIN_SUPPLY / 10 + amount_per_acc);
-			assert_eq!(Stablecoin::get_balance(8), COIN_SUPPLY / 10 + amount_per_acc);
-			assert_eq!(Stablecoin::get_balance(9), COIN_SUPPLY / 10);
-			assert_eq!(Stablecoin::get_balance(10), COIN_SUPPLY / 10);
+			assert_eq!(Stablecoin::get_balance(1), InitialSupply::get() / 10 + amount_per_acc);
+			assert_eq!(Stablecoin::get_balance(2), InitialSupply::get() / 10 + amount_per_acc);
+			assert_eq!(Stablecoin::get_balance(3), InitialSupply::get() / 10 + amount_per_acc);
+			assert_eq!(Stablecoin::get_balance(7), InitialSupply::get() / 10 + amount_per_acc);
+			assert_eq!(Stablecoin::get_balance(8), InitialSupply::get() / 10 + amount_per_acc);
+			assert_eq!(Stablecoin::get_balance(9), InitialSupply::get() / 10);
+			assert_eq!(Stablecoin::get_balance(10), InitialSupply::get() / 10);
 		});
 	}
 
@@ -1113,19 +1135,19 @@ mod tests {
 				Origin::signed(1),
 				vec![1, 2, 3, 4, 5, 6, 7, 8, 9, 10]
 			));
-			assert_eq!(Stablecoin::get_balance(1), COIN_SUPPLY / 10);
-			assert_eq!(Stablecoin::get_balance(10), COIN_SUPPLY / 10);
+			assert_eq!(Stablecoin::get_balance(1), InitialSupply::get() / 10);
+			assert_eq!(Stablecoin::get_balance(10), InitialSupply::get() / 10);
 
 			let amount = 13;
-			assert_ok!(Stablecoin::hand_out_coins_to_shareholders(amount));
+			assert_ok!(Stablecoin::hand_out_coins_to_shareholders(amount, Stablecoin::coin_supply()));
 
 			let amount_per_acc = 1;
-			assert_eq!(Stablecoin::get_balance(1), COIN_SUPPLY / 10 + amount_per_acc + 1);
-			assert_eq!(Stablecoin::get_balance(2), COIN_SUPPLY / 10 + amount_per_acc + 1);
-			assert_eq!(Stablecoin::get_balance(3), COIN_SUPPLY / 10 + amount_per_acc + 1);
-			assert_eq!(Stablecoin::get_balance(4), COIN_SUPPLY / 10 + amount_per_acc);
-			assert_eq!(Stablecoin::get_balance(8), COIN_SUPPLY / 10 + amount_per_acc);
-			assert_eq!(Stablecoin::get_balance(10), COIN_SUPPLY / 10 + amount_per_acc);
+			assert_eq!(Stablecoin::get_balance(1), InitialSupply::get() / 10 + amount_per_acc + 1);
+			assert_eq!(Stablecoin::get_balance(2), InitialSupply::get() / 10 + amount_per_acc + 1);
+			assert_eq!(Stablecoin::get_balance(3), InitialSupply::get() / 10 + amount_per_acc + 1);
+			assert_eq!(Stablecoin::get_balance(4), InitialSupply::get() / 10 + amount_per_acc);
+			assert_eq!(Stablecoin::get_balance(8), InitialSupply::get() / 10 + amount_per_acc);
+			assert_eq!(Stablecoin::get_balance(10), InitialSupply::get() / 10 + amount_per_acc);
 		});
 	}
 
@@ -1160,13 +1182,13 @@ mod tests {
 				// this assert might actually produce a false positive
 				// as there might be errors returned that are the correct
 				// behavior for the given parameters
-				assert_ok!(Stablecoin::hand_out_coins_to_shareholders(amount));
+				assert_ok!(Stablecoin::hand_out_coins_to_shareholders(amount, Stablecoin::coin_supply()));
 
 				let len = len as u64;
 				let payout = amount;
 				let balance = Stablecoin::get_balance(shareholders[0]);
-				assert_ge!(balance, COIN_SUPPLY / len + payout / len);
-				assert_le!(balance, COIN_SUPPLY / len + 1 + payout / len + 1);
+				assert_ge!(balance, InitialSupply::get() / len + payout / len);
+				assert_le!(balance, InitialSupply::get() / len + 1 + payout / len + 1);
 
 				TestResult::passed()
 			})
@@ -1189,18 +1211,18 @@ mod tests {
 				vec![1, 2, 3, 4, 5, 6, 7, 8, 9, 10]
 			));
 
-			// payout of 120% of BASE_UNIT
-			let payout = Fixed64::from_rational(20, 100).saturated_multiply_accumulate(BASE_UNIT);
+			// payout of 120% of BaseUnit
+			let payout = Fixed64::from_rational(20, 100).saturated_multiply_accumulate(BaseUnit::get());
 			Stablecoin::_add_bond(Stablecoin::new_bond(2, payout));
 			Stablecoin::_add_bond(Stablecoin::new_bond(3, payout));
 			Stablecoin::_add_bond(Stablecoin::new_bond(4, payout));
 			Stablecoin::_add_bond(Stablecoin::new_bond(5, 7 * payout));
 
 			let prev_supply = Stablecoin::coin_supply();
-			let amount = 13 * BASE_UNIT;
+			let amount = 13 * BaseUnit::get();
 			assert_ok!(Stablecoin::expand_supply(amount));
 
-			let amount_per_acc = COIN_SUPPLY / 10 + BASE_UNIT / 10;
+			let amount_per_acc = InitialSupply::get() / 10 + BaseUnit::get() / 10;
 			assert_eq!(Stablecoin::get_balance(1), amount_per_acc);
 			assert_eq!(Stablecoin::get_balance(2), amount_per_acc + payout);
 			assert_eq!(Stablecoin::get_balance(3), amount_per_acc + payout);
@@ -1226,7 +1248,7 @@ mod tests {
 			));
 
 			let bond_amount = Ratio::new(125, 100)
-				.checked_mul(&BASE_UNIT.into())
+				.checked_mul(&BaseUnit::get().into())
 				.map(|r| r.to_integer())
 				.expect("bond_amount should not have overflowed");
 			assert_ok!(Stablecoin::add_bid(Bid::new(
@@ -1237,17 +1259,17 @@ mod tests {
 			assert_ok!(Stablecoin::add_bid(Bid::new(
 				2,
 				Perbill::from_percent(75),
-				2 * BASE_UNIT
+				2 * BaseUnit::get()
 			)));
 
 			let prev_supply = Stablecoin::coin_supply();
-			let amount = 2 * BASE_UNIT;
+			let amount = 2 * BaseUnit::get();
 			assert_ok!(Stablecoin::contract_supply(amount));
 
 			let bids = Stablecoin::bond_bids();
 			let bonds = Stablecoin::bonds();
 			assert_eq!(bids.len(), 1, "exactly one bid should have been removed");
-			let remainging_bid_quantity = saturated_mul(Fixed64::from_rational(667, 1_000), BASE_UNIT);
+			let remainging_bid_quantity = saturated_mul(Fixed64::from_rational(667, 1_000), BaseUnit::get());
 			assert_eq!(
 				bids[0],
 				Bid::new(2, Perbill::from_percent(75), remainging_bid_quantity)
@@ -1255,7 +1277,7 @@ mod tests {
 			assert_eq!(bonds[0].payout, bond_amount);
 			assert_eq!(
 				bonds[1].payout,
-				Fixed64::from_rational(333, 1_000).saturated_multiply_accumulate(BASE_UNIT)
+				Fixed64::from_rational(333, 1_000).saturated_multiply_accumulate(BaseUnit::get())
 			);
 
 			assert_eq!(
@@ -1309,7 +1331,7 @@ mod tests {
 			let mut rng = rand::thread_rng();
 
 			let bonds: Vec<(u64, u64)> = (0..100)
-				.map(|_| (rng.gen_range(1, 200), rng.gen_range(1, 10 * BASE_UNIT)))
+				.map(|_| (rng.gen_range(1, 200), rng.gen_range(1, 10 * BaseUnit::get())))
 				.collect();
 
 			assert_ok!(Stablecoin::init_with_shareholders(
