@@ -785,7 +785,6 @@ mod tests {
 				prices,
 				vec![
 					Perbill::from_percent(50),
-					Perbill::from_percent(34),
 					Perbill::from_percent(33),
 					Perbill::from_percent(25)
 				]
