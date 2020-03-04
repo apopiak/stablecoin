@@ -213,6 +213,9 @@ decl_module! {
 
 			ensure!(!Self::initialized(), "can only be initialized once");
 
+			// ↑ verify ↑
+			// ↓ update ↓
+
 			<Shares<T>>::put(vec![(founder.clone(), SHARE_SUPPLY)]);
 
 			<Balance<T>>::insert(&founder, T::InitialSupply::get());
@@ -239,7 +242,9 @@ decl_module! {
 			// give one share to each shareholder
 			let shares: Vec<(T::AccountId, u64)> = shareholders.into_iter().zip(iter::repeat(1).take(len)).collect();
 
+			// ↑ verify ↑
 			Self::hand_out_coins(&shares, T::InitialSupply::get(), Self::coin_supply())?;
+			// ↓ update ↓
 
 			<Shares<T>>::put(shares);
 			<Init>::put(true);
@@ -257,6 +262,9 @@ decl_module! {
 			let updated_from_balance = sender_balance.checked_sub(amount).ok_or("not enough balance to transfer (underflow)")?;
 			let receiver_balance = Self::get_balance(&to);
 			let updated_to_balance = receiver_balance.checked_add(amount).ok_or("overflow for transfer target")?;
+
+			// ↑ verify ↑
+			// ↓ update ↓
 
 			// reduce sender's balance
 			<Balance<T>>::insert(&sender, updated_from_balance);
@@ -285,7 +293,9 @@ decl_module! {
 
 			let bid = Bid::new(who.clone(), price_per_bond, quantity);
 
+			// ↑ verify ↑
 			Self::remove_balance(&who, bid.payment())?;
+			// ↓ update ↓
 			Self::add_bid(bid)?;
 
 			Self::deposit_event(RawEvent::NewBid(who, price_per_bond, quantity));
@@ -296,7 +306,8 @@ decl_module! {
 		/// Cancel all bids at or below `price` of the sender and refund the coins.
 		pub fn cancel_bids_at_or_below(origin, price: Perbill) -> DispatchResult {
 			let who = ensure_signed(origin)?;
-
+			// ↑ verify ↑
+			// ↓ update ↓
 			Self::cancel_bids(|bid| bid.account == who && bid.price <= price);
 
 			Self::deposit_event(RawEvent::CancelledBidsBelow(who, price));
@@ -307,7 +318,8 @@ decl_module! {
 		/// Cancel all bids belonging to the sender and refund the coins.
 		pub fn cancel_all_bids(origin) -> DispatchResult {
 			let who = ensure_signed(origin)?;
-
+			// ↑ verify ↑
+			// ↓ update ↓
 			Self::cancel_bids(|bid| bid.account == who);
 
 			Self::deposit_event(RawEvent::CancelledBids(who));
@@ -443,6 +455,7 @@ impl<T: Trait> Module<T> {
 		if remaining_supply < T::MinimumSupply::get() {
 			return Err(DispatchError::from(Error::<T>::CoinSupplyUnderflow));
 		}
+		// ↑ verify ↑
 		let mut bids = Self::bond_bids();
 		let mut remaining = amount;
 		let mut new_bonds = VecDeque::new();
@@ -481,6 +494,7 @@ impl<T: Trait> Module<T> {
 		}
 		let mut bonds = Self::bonds();
 		bonds.append(&mut new_bonds);
+		// ↓ update ↓
 		<Bonds<T>>::put(bonds);
 		<CoinSupply>::put(new_supply);
 		<BondBids<T>>::put(bids);
@@ -510,7 +524,7 @@ impl<T: Trait> Module<T> {
 		coin_supply
 			.checked_add(amount)
 			.ok_or(Error::<T>::CoinSupplyOverflow)?;
-
+		// ↑ verify ↑
 		let mut bonds = Self::bonds();
 		let mut remaining = amount;
 		while let Some(Bond {
@@ -550,6 +564,7 @@ impl<T: Trait> Module<T> {
 		// safe to do this late because of the test in the first line of the function
 		// safe to substrate remaining because we initialize it with amount and never increase it
 		let new_supply = coin_supply + amount - remaining;
+		// ↓ update ↓
 		if remaining > 0 {
 			// relies on supply being updated in `hand_out_coins`
 			Self::hand_out_coins(&Self::shares(), remaining, new_supply)?;
@@ -569,13 +584,14 @@ impl<T: Trait> Module<T> {
 		coin_supply
 			.checked_add(amount)
 			.ok_or(Error::<T>::CoinSupplyOverflow)?;
-
+		// ↑ verify ↑
 		let share_supply: u64 = shares.iter().map(|(_a, s)| s).sum();
 		let len = shares.len() as u64;
 		// No point in giving out less than 1 coin.
 		let coins_per_share = max(1, amount / share_supply);
 		let pay_extra = coins_per_share * len < amount;
 		let mut amount_payed = 0;
+		// ↓ update ↓
 		for (i, (acc, num_shares)) in shares.iter().enumerate() {
 			if amount_payed >= amount {
 				break;
