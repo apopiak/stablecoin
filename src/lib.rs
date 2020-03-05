@@ -369,14 +369,12 @@ impl<T: Trait> Module<T> {
 	//		 to the last bid in the queue and evict people on purpose.
 	fn _add_bid_to(bid: Bid<T::AccountId>, bids: &mut Vec<Bid<T::AccountId>>) {
 		let index: usize = bids
-			// sort the bids from highest to lowest
-			.binary_search_by(|&Bid { price, .. }| bid.price.cmp(&price))
+			// sort the bids from lowest to highest, so we can pop the highest bid
+			.binary_search_by(|&Bid { price, .. }| price.cmp(&bid.price))
 			.unwrap_or_else(|i| i);
 		bids.insert(index, bid);
 		if bids.len() > T::MaximumBids::get() {
-			if let Some(removed_bid) = bids.pop() {
-				Self::refund_bid(&removed_bid);
-			}
+			Self::refund_bid(&bids.remove(0));
 		}
 		debug_assert!(
 			bids.len() <= T::MaximumBids::get(),
@@ -456,7 +454,9 @@ impl<T: Trait> Module<T> {
 		let mut new_bonds = VecDeque::new();
 		// ↓ update ↓
 		while remaining > 0 && !bids.is_empty() {
-			let mut bid = bids.remove(0);
+			let mut bid = bids
+				.pop()
+				.expect("checked whether queue is empty on previous line; qed");
 			if bid.payment() >= remaining {
 				match bid.remove_coins(remaining) {
 					Err(_e) => {
@@ -804,30 +804,19 @@ mod tests {
 			assert_ok!(Stablecoin::init(Origin::signed(1)));
 
 			let bid_amount = 5 * BaseUnit::get();
-			Stablecoin::add_bid(Bid::new(
-				1,
-				Perbill::from_percent(25),
-				bid_amount
-			));
-			Stablecoin::add_bid(Bid::new(
-				1,
-				Perbill::from_percent(33),
-				bid_amount
-			));
-			Stablecoin::add_bid(Bid::new(
-				1,
-				Perbill::from_percent(50),
-				bid_amount
-			));
+			Stablecoin::add_bid(Bid::new(1, Perbill::from_percent(25), bid_amount));
+			Stablecoin::add_bid(Bid::new(1, Perbill::from_percent(33), bid_amount));
+			Stablecoin::add_bid(Bid::new(1, Perbill::from_percent(50), bid_amount));
 
 			let bids = Stablecoin::bond_bids();
 			let prices: Vec<_> = bids.into_iter().map(|Bid { price, .. }| price).collect();
+			// largest bid is stored last so we can pop
 			assert_eq!(
 				prices,
 				vec![
-					Perbill::from_percent(50),
+					Perbill::from_percent(25),
 					Perbill::from_percent(33),
-					Perbill::from_percent(25)
+					Perbill::from_percent(50),
 				]
 			);
 		});
@@ -840,11 +829,7 @@ mod tests {
 
 			let bid_amount = 5 * BaseUnit::get();
 			for _i in 0..(2 * MaximumBids::get()) {
-				Stablecoin::add_bid(Bid::new(
-					1,
-					Perbill::from_percent(25),
-					bid_amount
-				));
+				Stablecoin::add_bid(Bid::new(1, Perbill::from_percent(25), bid_amount));
 			}
 
 			assert_eq!(Stablecoin::bond_bids().len(), MaximumBids::get());
@@ -874,26 +859,10 @@ mod tests {
 			assert_ok!(Stablecoin::init(Origin::signed(1)));
 
 			let bid_amount = 5 * BaseUnit::get();
-			Stablecoin::add_bid(Bid::new(
-				1,
-				Perbill::from_percent(25),
-				bid_amount
-			));
-			Stablecoin::add_bid(Bid::new(
-				2,
-				Perbill::from_percent(33),
-				bid_amount
-			));
-			Stablecoin::add_bid(Bid::new(
-				1,
-				Perbill::from_percent(50),
-				bid_amount
-			));
-			Stablecoin::add_bid(Bid::new(
-				3,
-				Perbill::from_percent(50),
-				bid_amount
-			));
+			Stablecoin::add_bid(Bid::new(1, Perbill::from_percent(25), bid_amount));
+			Stablecoin::add_bid(Bid::new(2, Perbill::from_percent(33), bid_amount));
+			Stablecoin::add_bid(Bid::new(1, Perbill::from_percent(50), bid_amount));
+			Stablecoin::add_bid(Bid::new(3, Perbill::from_percent(50), bid_amount));
 			assert_eq!(Stablecoin::bond_bids().len(), 4);
 
 			assert_ok!(Stablecoin::cancel_all_bids(Origin::signed(1)));
@@ -912,31 +881,11 @@ mod tests {
 			assert_ok!(Stablecoin::init(Origin::signed(1)));
 
 			let bid_amount = 5 * BaseUnit::get();
-			Stablecoin::add_bid(Bid::new(
-				1,
-				Perbill::from_percent(25),
-				bid_amount
-			));
-			Stablecoin::add_bid(Bid::new(
-				2,
-				Perbill::from_percent(33),
-				bid_amount
-			));
-			Stablecoin::add_bid(Bid::new(
-				1,
-				Perbill::from_percent(45),
-				bid_amount
-			));
-			Stablecoin::add_bid(Bid::new(
-				1,
-				Perbill::from_percent(50),
-				bid_amount
-			));
-			Stablecoin::add_bid(Bid::new(
-				3,
-				Perbill::from_percent(55),
-				bid_amount
-			));
+			Stablecoin::add_bid(Bid::new(1, Perbill::from_percent(25), bid_amount));
+			Stablecoin::add_bid(Bid::new(2, Perbill::from_percent(33), bid_amount));
+			Stablecoin::add_bid(Bid::new(1, Perbill::from_percent(45), bid_amount));
+			Stablecoin::add_bid(Bid::new(1, Perbill::from_percent(50), bid_amount));
+			Stablecoin::add_bid(Bid::new(3, Perbill::from_percent(55), bid_amount));
 			assert_eq!(Stablecoin::bond_bids().len(), 5);
 
 			assert_ok!(Stablecoin::cancel_bids_at_or_below(
@@ -950,12 +899,13 @@ mod tests {
 				.into_iter()
 				.map(|Bid { account, price, .. }| (account, price))
 				.collect();
+			// highest bid is last so we can pop
 			assert_eq!(
 				bids,
 				vec![
-					(3, Perbill::from_percent(55)),
-					(1, Perbill::from_percent(50)),
 					(2, Perbill::from_percent(33)),
+					(1, Perbill::from_percent(50)),
+					(3, Perbill::from_percent(55)),
 				]
 			);
 		});
@@ -1273,16 +1223,8 @@ mod tests {
 				.checked_mul(&BaseUnit::get().into())
 				.map(|r| r.to_integer())
 				.expect("bond_amount should not have overflowed");
-			Stablecoin::add_bid(Bid::new(
-				1,
-				Perbill::from_percent(80),
-				bond_amount
-			));
-			Stablecoin::add_bid(Bid::new(
-				2,
-				Perbill::from_percent(75),
-				2 * BaseUnit::get()
-			));
+			Stablecoin::add_bid(Bid::new(1, Perbill::from_percent(80), bond_amount));
+			Stablecoin::add_bid(Bid::new(2, Perbill::from_percent(75), 2 * BaseUnit::get()));
 
 			let prev_supply = Stablecoin::coin_supply();
 			let amount = 2 * BaseUnit::get();
