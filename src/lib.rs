@@ -1,7 +1,71 @@
-//! Stablecoin example pallet
+//! # Stablecoin example pallet
 //!
-//! This is a substrate pallet showcasing a simple implementation of a stablecoin based
-//! on the [Basis Whitepaper](https://www.basis.io/basis_whitepaper_en.pdf).
+//! This is a substrate pallet showcasing a sample implementation of a non-collateralized
+//! stablecoin based on the [Basis Whitepaper](https://www.basis.io/basis_whitepaper_en.pdf).
+//!
+//! **Note: Example project for illustration, NOT audited and NOT production ready.**
+//!
+//! ## Dependecies
+//!
+//! This pallet depends on an external implementation of its `FetchPrice` trait - for example by an offchain worker - to act as a price oracle.
+//!
+//! ## Installation
+//!
+//! ### Runtime `Cargo.toml`
+//!
+//! To add this pallet to your runtime, simply include the following in your runtime's `Cargo.toml` file:
+//!
+//! ```TOML
+//! [dependencies.pallet-stablecoin]
+//! default_features = false
+//! git = 'https://github.com/apopiak/pallet-stablecoin.git'
+//! ```
+//!
+//! and update your runtime's `std` feature to include this pallet's `std` feature:
+//!
+//! ```TOML
+//! std = [
+//!     # --snip--
+//!     'pallet_stablecoin/std',
+//! ]
+//! ```
+//!
+//! ### Runtime `lib.rs`
+//!
+//! Here is an example imlementation of its trait:
+//!
+//! ```rust
+//! use pallet_stablecoin::Coins;
+//!
+//! parameter_types! {
+//!     pub const ExpirationPeriod: BlockNumber = 5 * 365 * DAYS; // 5 years = 5 * 365 * DAYS
+//!     pub const MaximumBids: usize = 1_000;
+//!     pub const AdjustmentFrequency: BlockNumber = 1 * MINUTES; // 1 minute = 60000 / MILLISECS_PER_BLOCK
+//!     pub const BaseUnit: Coins = 1_000_000;
+//!     pub const InitialSupply: Coins = 1000 * BaseUnit::get();
+//!     pub const MinimumSupply: Coins = BaseUnit::get();
+//! }
+//!
+//! impl pallet_stablecoin::Trait for Runtime {
+//!     type Event = Event;
+//!     
+//!     type CoinPrice = some_price_oracle::Module<Runtime>;
+//!     type ExpirationPeriod = ExpirationPeriod;
+//!     type MaximumBids = MaximumBids;
+//!     type AdjustmentFrequency = AdjustmentFrequency;
+//!     type BaseUnit = BaseUnit;
+//!     type InitialSupply = InitialSupply;
+//!     type MinimumSupply = MinimumSupply;
+//! }
+//! ```
+//!
+//! and include it in your `construct_runtime!` macro:
+//!
+//! ```rust
+//! Stablecoin: pallet_stablecoin::{Module, Call, Storage, Event<T>},
+//! ```
+//!
+
 #![cfg_attr(not(feature = "std"), no_std)]
 
 use sp_std::prelude::*;
@@ -25,7 +89,7 @@ mod utils;
 
 use utils::saturated_mul;
 
-/// Trait for getting a price.
+/// Expected price oracle interface. `fetch_price` must return the amount of coins exchanged for the tracked value.
 pub trait FetchPrice<Balance> {
 	/// Fetch the current price.
 	fn fetch_price() -> Balance;
@@ -42,6 +106,9 @@ pub trait Trait: system::Trait {
 	/// The amount of coins necessary to buy the tracked value.
 	type CoinPrice: FetchPrice<Coins>;
 	/// The expiration time of a bond.
+	///
+	/// The [Basis Whitepaper](https://www.basis.io/basis_whitepaper_en.pdf) recommends an expiration
+	/// period of 5 years.
 	type ExpirationPeriod: Get<<Self as system::Trait>::BlockNumber>;
 	/// The maximum amount of bids allowed in the queue. Used to prevent the queue from growing forever.
 	type MaximumBids: Get<usize>;
@@ -59,10 +126,11 @@ pub trait Trait: system::Trait {
 // Number of Share tokens, fixed at genesis.
 const SHARE_SUPPLY: u64 = 100;
 
-// The Basis whitepaper recommends 10% based on simulations.
+// The [Basis Whitepaper](https://www.basis.io/basis_whitepaper_en.pdf) recommends
+// 10% based on simulations.
 const MINIMUM_BOND_PRICE: Perbill = Perbill::from_percent(10);
 
-/// A bond representing (possible) future payout of coins.
+/// A bond representing (potential) future payout of coins.
 ///
 /// Expires at block `expiration` so it will be discarded if payed out after that block.
 #[derive(Encode, Decode, Default, Clone, PartialEq, PartialOrd, Eq, Ord)]
@@ -75,8 +143,8 @@ pub struct Bond<AccountId, BlockNumber> {
 
 /// A bid for a bond of the stablecoin at a certain price.
 ///
-/// `price_in_coins` is the amount of coins burned.
-/// `quantity` is the amount of coins gained on payout.
+/// + `price` is a percentage of 1 coin.
+/// + `quantity` is the amount of coins gained on payout of the corresponding bond.
 #[derive(Encode, Decode, Default, Clone, PartialEq)]
 #[cfg_attr(feature = "std", derive(Debug))]
 pub struct Bid<AccountId> {
@@ -85,14 +153,15 @@ pub struct Bid<AccountId> {
 	quantity: Coins,
 }
 
+/// Error returned from `remove_coins` if there is an over- or underflow.
 pub enum BidError {
 	Overflow,
 	Underflow,
 }
 
 impl<AccountId> Bid<AccountId> {
+	/// Create a new bid.
 	fn new(account: AccountId, price: Perbill, quantity: Coins) -> Bid<AccountId> {
-		// This is fine because Perbill has an implementation tuned for balance types.
 		Bid {
 			account,
 			price,
@@ -100,7 +169,9 @@ impl<AccountId> Bid<AccountId> {
 		}
 	}
 
+	/// Return the amount of coins to be payed for this bid.
 	fn payment(&self) -> Coins {
+		// This naive multiplication is fine because Perbill has an implementation tuned for balance types.
 		self.price * self.quantity
 	}
 
@@ -150,6 +221,7 @@ decl_event!(
 );
 
 decl_error! {
+	/// The possible errors returned by calls to this pallet's functions.
 	pub enum Error for Module<T: Trait> {
 		CoinSupplyOverflow,
 		CoinSupplyUnderflow,
@@ -174,18 +246,26 @@ impl<T: Trait> From<BidError> for Error<T> {
 // This pallet's storage items.
 decl_storage! {
 	trait Store for Module<T: Trait> as Stablecoin {
+		/// The minimum percentage to pay for a bond.
 		MinimumBondPrice get(fn minimum_bond_price): Perbill = MINIMUM_BOND_PRICE;
 
+		/// Whether the stablecoin is initialized.
 		Init get(fn initialized): bool = false;
 
+		/// The allocation of shares to accounts.
 		Shares get(fn shares): Vec<(T::AccountId, u64)>;
 
+		/// The balance of stablecoin associated with each account.
 		Balance get(fn get_balance): map hasher(blake2_128_concat) T::AccountId => Coins;
+
+		/// The total amount of coins in circulation.
 		CoinSupply get(fn coin_supply): Coins;
 
+		/// The available bonds for contracting supply.
 		// TODO: limit the maximum bond size
 		Bonds get(fn bonds): VecDeque<Bond<T::AccountId, T::BlockNumber>>;
 
+		/// The current bidding queue for bonds.
 		BondBids get(fn bond_bids): Vec<Bid<T::AccountId>>;
 	}
 	add_extra_genesis {
