@@ -1075,6 +1075,81 @@ mod tests {
 		});
 	}
 
+	// ------------------------------------------------------------
+	// ringbuffer
+
+	#[test]
+	fn ringbuffer_push_bond() {
+		new_test_ext().execute_with(|| {
+			assert_ok!(Stablecoin::init(Origin::signed(1)));
+
+			let start_end = Stablecoin::bonds_range();
+			let payout = Fixed64::from_rational(20, 100).saturated_multiply_accumulate(BaseUnit::get());
+			let (start, end) = Stablecoin::push_bond(start_end, Stablecoin::new_bond(2, payout));
+			assert_eq!(start..end, 0..1);
+		})
+	}
+
+	#[test]
+	fn ringbuffer_pop_bond() {
+		new_test_ext().execute_with(|| {
+			assert_ok!(Stablecoin::init(Origin::signed(1)));
+
+			let start_end = Stablecoin::bonds_range();
+			let payout = Fixed64::from_rational(20, 100).saturated_multiply_accumulate(BaseUnit::get());
+			let (start, end) = Stablecoin::push_bond(start_end, Stablecoin::new_bond(2, payout));
+			assert_eq!(start..end, 0..1);
+
+			let ((start, end), bond) = Stablecoin::pop_bond((start, end));
+			assert!(bond.is_some());
+			assert_eq!(start..end, 1..1);
+		})
+	}
+
+	#[test]
+	fn ringbuffer_wrap_around() {
+		new_test_ext().execute_with(|| {
+			assert_ok!(Stablecoin::init(Origin::signed(1)));
+
+			let mut start_end = Stablecoin::bonds_range();
+			let payout = Fixed64::from_rational(20, 100).saturated_multiply_accumulate(BaseUnit::get());
+			for i in 1..(u16::max_value() as u64) + 2 {
+				start_end = Stablecoin::push_bond(start_end, Stablecoin::new_bond(i, payout));
+			}
+			assert_eq!(start_end, (1, 0), "range should be inverted because the index wrapped around");
+
+			let ((start, end), bond) = Stablecoin::pop_bond(start_end);
+			assert_eq!(start..end, 2..0);
+			let bond = bond.expect("a valid bond should be returned");
+			assert_eq!(bond.account, 2, "the bond for account 2, was placed at index 1");
+
+			let ((start, end), bond) = Stablecoin::pop_bond((start, end));
+			assert_eq!(start..end, 3..0);
+			let bond = bond.expect("a valid bond should be returned");
+			assert_eq!(bond.account, 3, "the bond for account 3, was placed at index 2");
+
+			start_end = (start, end);
+			for i in 1..4 {
+				start_end = Stablecoin::push_bond(start_end, Stablecoin::new_bond(i, payout));
+			}
+			assert_eq!(start_end, (4, 3));
+		})
+	}
+
+	#[test]
+	fn ringbuffer_push_front() {
+		new_test_ext().execute_with(|| {
+			assert_ok!(Stablecoin::init(Origin::signed(1)));
+
+			let start_end = Stablecoin::bonds_range();
+			let payout = Fixed64::from_rational(20, 100).saturated_multiply_accumulate(BaseUnit::get());
+			let start_end = Stablecoin::push_bond_front(start_end, Stablecoin::new_bond(2, payout));
+			assert_eq!(start_end, (0, 1));
+
+			let start_end= Stablecoin::push_bond_front(start_end, Stablecoin::new_bond(2, payout));
+			assert_eq!(start_end, (u16::max_value(), 1));
+		})
+	}
 	
 	// ------------------------------------------------------------
 	// bonds
