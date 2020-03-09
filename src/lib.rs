@@ -603,10 +603,10 @@ impl<T: Trait> Module<T> {
 		<Bonds<T>>::insert(bonds_end, bond);
 		// this will intentionally overflow and wrap around when bonds_end
 		// reaches `BondIndex::max_value` because we want a ringbuffer.
-		let next_index = bonds_end + 1;
+		let next_index = bonds_end.wrapping_add(1);
 		if next_index == bonds_start {
 			// overwrite the oldest item in the FIFO ringbuffer
-			(bonds_start + 1, next_index)
+			(bonds_start.wrapping_add(1), next_index)
 		} else {
 			(bonds_start, next_index)
 		}
@@ -619,7 +619,7 @@ impl<T: Trait> Module<T> {
 			return ((bonds_start, bonds_end), None);
 		}
 		let bond = <Bonds<T>>::take(bonds_start);
-		((bonds_start + 1, bonds_end), bond.into())
+		((bonds_start.wrapping_add(1), bonds_end), bond.into())
 	}
 
 	fn push_bond_front(
@@ -629,7 +629,7 @@ impl<T: Trait> Module<T> {
 		if bonds_start == bonds_end {
 			return Self::push_bond((bonds_start, bonds_end), bond);
 		}
-		let index = bonds_start - 1;
+		let index = bonds_start.wrapping_sub(1);
 		<Bonds<T>>::insert(index, bond);
 		(index, bonds_end)
 	}
@@ -694,7 +694,7 @@ impl<T: Trait> Module<T> {
 		}
 		let (bonds_start, mut bonds_end) = start_end;
 		if bonds_start == bonds_end && <Bonds<T>>::contains_key(bonds_start) {
-			bonds_end = bonds_end + 1;
+			bonds_end = bonds_end.wrapping_add(1);
 		}
 		<BondsRange>::put((bonds_start, bonds_end));
 		// safe to do this late because of the test in the first line of the function
