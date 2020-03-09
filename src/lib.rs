@@ -34,7 +34,7 @@
 //!
 //! Here is an example imlementation of its trait:
 //!
-//! ```ignore
+//! ```rust,ignore
 //! use pallet_stablecoin::Coins;
 //!
 //! parameter_types! {
@@ -61,7 +61,7 @@
 //!
 //! and include it in your `construct_runtime!` macro:
 //!
-//! ```ignore
+//! ```rust,ignore
 //! Stablecoin: pallet_stablecoin::{Module, Call, Storage, Event<T>},
 //! ```
 //!
@@ -961,7 +961,7 @@ mod tests {
 	}
 
 	// ------------------------------------------------------------
-	// bids and bonds
+	// bids
 	#[test]
 	fn bids_are_sorted_highest_to_lowest() {
 		new_test_ext().execute_with(|| {
@@ -1075,6 +1075,9 @@ mod tests {
 		});
 	}
 
+	
+	// ------------------------------------------------------------
+	// bonds
 	#[test]
 	fn adding_bonds() {
 		new_test_ext().execute_with(|| {
