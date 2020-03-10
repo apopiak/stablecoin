@@ -47,7 +47,7 @@ where
 	I: Codec + EncodeLike,
 	B: StorageValue<(Index, Index), Query = (Index, Index)>,
 	M: StorageMap<Index, I, Query = I>,
-	T: RingBufferTrait<I>,
+	T: RingBufferTrait<I> + ?Sized,
 {
 	type Item = I;
 	type Bounds = B;
@@ -134,7 +134,7 @@ mod tests {
 	}
 
 	#[derive(Clone, PartialEq, Encode, Decode, Default)]
-	struct SomeStruct {
+	pub struct SomeStruct {
 		foo: u16,
 		bar: u32,
 	}
@@ -198,7 +198,7 @@ mod tests {
 	fn ringbuffer_test() {
 		new_test_ext().execute_with(|| {
 
-			let ring : Box<dyn RingBufferTrait<SomeStruct, Item = SomeStruct, Bounds = <TestModule as Store>::TestRange, Map = <TestModule as Store>::TestMap>> = Box::new(
+			let mut ring : Box<dyn RingBufferTrait<SomeStruct, Item = SomeStruct, Bounds = <TestModule as Store>::TestRange, Map = <TestModule as Store>::TestMap>> = Box::new(
 				RingBufferTransient::<
 					RingBuffer, 
 					SomeStruct,
