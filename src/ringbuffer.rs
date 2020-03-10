@@ -4,7 +4,7 @@ use frame_support::storage::{StorageValue, StorageMap};
 
 pub type Index = u16;
 
-pub struct RingBufferTransient<T, I, B, M> 
+pub struct RingBufferTransient<I, B, M, T>
 where T: ?Sized
 {
 	start: Index,
@@ -12,7 +12,7 @@ where T: ?Sized
 	_t: PhantomData<(I, B, M, T)>,
 }
 
-impl<T, I, B, M> RingBufferTransient<T, I, B, M>
+impl<I, B, M, T> RingBufferTransient<I, B, M, T>
 where
 	I: Codec + EncodeLike,
  	B: StorageValue<(Index, Index), Query = (Index, Index)>,
@@ -20,7 +20,7 @@ where
 	T: RingBufferTrait<I, Item = I, Bounds = B, Map = M> + ?Sized
 {
 
-	pub fn new() -> RingBufferTransient<T, I, B, M> {
+	pub fn new() -> RingBufferTransient<I, B, M, T> {
 		let (start, end) = <<T as RingBufferTrait<I>>::Bounds>::get();
 		RingBufferTransient { start, end, _t: PhantomData }
 	}
@@ -42,7 +42,7 @@ where
 	fn pop(&mut self) -> Option<Self::Item>;
 }
 
-impl<T, I, B, M> RingBufferTrait<I> for RingBufferTransient<T, I, B, M>
+impl<I, B, M, T> RingBufferTrait<I> for RingBufferTransient<I, B, M, T>
 where
 	I: Codec + EncodeLike,
 	B: StorageValue<(Index, Index), Query = (Index, Index)>,
@@ -135,8 +135,8 @@ mod tests {
 
 	#[derive(Clone, PartialEq, Encode, Decode, Default, Debug)]
 	pub struct SomeStruct {
-		foo: u16,
-		bar: u32,
+		foo: u64,
+		bar: u64,
 	}
 
 	decl_storage! {
@@ -194,17 +194,16 @@ mod tests {
 	type RingBuffer = dyn RingBufferTrait<
 		SomeStruct,
 		Item = SomeStruct, Bounds = <TestModule as Store>::TestRange, Map = <TestModule as Store>::TestMap>;
+	type Transient = RingBufferTransient::<
+		SomeStruct,
+		<TestModule as Store>::TestRange,
+		<TestModule as Store>::TestMap,
+		RingBuffer>;
+	
 	#[test]
 	fn simple_push() {
 		new_test_ext().execute_with(|| {
-
-			let mut ring : Box<dyn RingBufferTrait<SomeStruct, Item = SomeStruct, Bounds = <TestModule as Store>::TestRange, Map = <TestModule as Store>::TestMap>> = Box::new(
-				RingBufferTransient::<
-					RingBuffer, 
-					SomeStruct,
-					<TestModule as Store>::TestRange,
-					<TestModule as Store>::TestMap
-					>::new());
+			let mut ring : Box<RingBuffer> = Box::new(Transient::new());
 			ring.push(SomeStruct{foo: 1, bar: 2});
 			ring.commit();
 			let start_end = TestModule::get_test_range();
@@ -214,68 +213,72 @@ mod tests {
 		})
 	}
 
-	// #[test]
-	// fn ringbuffer_pop_bond() {
-	// 	new_test_ext().execute_with(|| {
-	// 		assert_ok!(Stablecoin::init(Origin::signed(1)));
+	#[test]
+	fn simple_pop() {
+		new_test_ext().execute_with(|| {
+			let mut ring : Box<RingBuffer> = Box::new(Transient::new());
+			ring.push(SomeStruct{foo: 1, bar: 2});
 
-	// 		let start_end = Stablecoin::bonds_range();
-	// 		let payout = Fixed64::from_rational(20, 100).saturated_multiply_accumulate(BaseUnit::get());
-	// 		let (start, end) = Stablecoin::push_bond(start_end, Stablecoin::new_bond(2, payout));
-	// 		assert_eq!(start..end, 0..1);
+			let item = ring.pop();
+			ring.commit();
+			assert!(item.is_some());
+			let start_end = TestModule::get_test_range();
+			assert_eq!(start_end, (1, 1));
+		})
+	}
 
-	// 		let ((start, end), bond) = Stablecoin::pop_bond((start, end));
-	// 		assert!(bond.is_some());
-	// 		assert_eq!(start..end, 1..1);
-	// 	})
-	// }
+	#[test]
+	fn overflow_wrap_around() {
+		new_test_ext().execute_with(|| {
+			let mut ring : Box<RingBuffer> = Box::new(Transient::new());
+			
+			for i in 1..(u16::max_value() as u64) + 2 {
+				ring.push(SomeStruct{foo: 42, bar: i});
+			}
+			ring.commit();
+			let start_end = TestModule::get_test_range();
+			assert_eq!(
+				start_end,
+				(1, 0),
+				"range should be inverted because the index wrapped around"
+			);
 
-	// #[test]
-	// fn ringbuffer_wrap_around() {
-	// 	new_test_ext().execute_with(|| {
-	// 		assert_ok!(Stablecoin::init(Origin::signed(1)));
+			let item = ring.pop();
+			ring.commit();
+			let (start, end) = TestModule::get_test_range();
+			assert_eq!(start..end, 2..0);
+			let item = item.expect("a valid bond should be returned");
+			assert_eq!(item.bar, 2, "the struct for field `bar = 2`, was placed at index 1");
 
-	// 		let mut start_end = Stablecoin::bonds_range();
-	// 		let payout = Fixed64::from_rational(20, 100).saturated_multiply_accumulate(BaseUnit::get());
-	// 		for i in 1..(u16::max_value() as u64) + 2 {
-	// 			start_end = Stablecoin::push_bond(start_end, Stablecoin::new_bond(i, payout));
-	// 		}
-	// 		assert_eq!(
-	// 			start_end,
-	// 			(1, 0),
-	// 			"range should be inverted because the index wrapped around"
-	// 		);
+			let item = ring.pop();
+			ring.commit();
+			let (start, end) = TestModule::get_test_range();
+			assert_eq!(start..end, 3..0);
+			let item = item.expect("a valid bond should be returned");
+			assert_eq!(item.bar, 3, "the struct for field `bar = 3`, was placed at index 2");
 
-	// 		let ((start, end), bond) = Stablecoin::pop_bond(start_end);
-	// 		assert_eq!(start..end, 2..0);
-	// 		let bond = bond.expect("a valid bond should be returned");
-	// 		assert_eq!(bond.account, 2, "the bond for account 2, was placed at index 1");
+			for i in 1..4 {
+				ring.push(SomeStruct{foo: 21, bar: i});
+			}
+			ring.commit();
+			let start_end = TestModule::get_test_range();
+			assert_eq!(start_end, (4, 3));
+		})
+	}
 
-	// 		let ((start, end), bond) = Stablecoin::pop_bond((start, end));
-	// 		assert_eq!(start..end, 3..0);
-	// 		let bond = bond.expect("a valid bond should be returned");
-	// 		assert_eq!(bond.account, 3, "the bond for account 3, was placed at index 2");
+	#[test]
+	fn simple_push_front() {
+		new_test_ext().execute_with(|| {
+			let mut ring : Box<RingBuffer> = Box::new(Transient::new());
+			ring.push_front(SomeStruct{foo: 1, bar: 2});
+			ring.commit();
+			let start_end = TestModule::get_test_range();
+			assert_eq!(start_end, (0, 1));
 
-	// 		start_end = (start, end);
-	// 		for i in 1..4 {
-	// 			start_end = Stablecoin::push_bond(start_end, Stablecoin::new_bond(i, payout));
-	// 		}
-	// 		assert_eq!(start_end, (4, 3));
-	// 	})
-	// }
-
-	// #[test]
-	// fn ringbuffer_push_front() {
-	// 	new_test_ext().execute_with(|| {
-	// 		assert_ok!(Stablecoin::init(Origin::signed(1)));
-
-	// 		let start_end = Stablecoin::bonds_range();
-	// 		let payout = Fixed64::from_rational(20, 100).saturated_multiply_accumulate(BaseUnit::get());
-	// 		let start_end = Stablecoin::push_bond_front(start_end, Stablecoin::new_bond(2, payout));
-	// 		assert_eq!(start_end, (0, 1));
-
-	// 		let start_end = Stablecoin::push_bond_front(start_end, Stablecoin::new_bond(2, payout));
-	// 		assert_eq!(start_end, (u16::max_value(), 1));
-	// 	})
-	// }
+			ring.push_front(SomeStruct{foo: 20, bar: 42});
+			ring.commit();
+			let start_end = TestModule::get_test_range();
+			assert_eq!(start_end, (u16::max_value(), 1));
+		})
+	}
 }
