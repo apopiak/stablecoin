@@ -201,11 +201,11 @@ mod tests {
 	// ------------------------------------------------------------
 	// ringbuffer
 
-	// trait object that we will be interacting with
+	// Trait object that we will be interacting with.
 	type RingBuffer = dyn RingBufferTrait<
 		SomeStruct,
 		Item = SomeStruct, Bounds = <TestModule as Store>::TestRange, Map = <TestModule as Store>::TestMap>;
-	// implementation that we will instantiate
+	// Implementation that we will instantiate.
 	type Transient = RingBufferTransient::<
 		SomeStruct,
 		<TestModule as Store>::TestRange,
