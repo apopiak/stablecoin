@@ -86,6 +86,7 @@ use sp_std::iter;
 use system::ensure_signed;
 
 mod utils;
+mod ringbuffer;
 
 use utils::saturated_mul;
 
