@@ -1,9 +1,10 @@
 use core::marker::PhantomData;
-use codec::{Codec, Encode, Decode, EncodeLike};
+use codec::{Codec, EncodeLike};
 use frame_support::storage::{StorageValue, StorageMap};
 
 pub type Index = u16;
 
+/// Transient backing data that is the backbone of the trait object.
 pub struct RingBufferTransient<I, B, M, T>
 where T: ?Sized
 {
@@ -19,13 +20,16 @@ where
  	M: StorageMap<Index, I, Query = I>,
 	T: RingBufferTrait<I, Item = I, Bounds = B, Map = M> + ?Sized
 {
-
+	/// Create a new RingBufferTransient that backs the ringbuffer implementation.
+	/// 
+	/// Initializes itself from the Bounds.
 	pub fn new() -> RingBufferTransient<I, B, M, T> {
 		let (start, end) = <<T as RingBufferTrait<I>>::Bounds>::get();
 		RingBufferTransient { start, end, _t: PhantomData }
 	}
 }
 
+/// Trait object presenting the ringbuffer interface.
 pub trait RingBufferTrait<I>
 where
 	I: Codec + EncodeLike,
@@ -34,14 +38,23 @@ where
 	type Bounds: StorageValue<(Index, Index)>;
 	type Map: StorageMap<Index, I>;
 
+	/// Store all changes made in the underlying storage.
+	/// 
+	/// Data is not guaranteed to be consistent before this call.
 	fn commit(&self);
 
+	/// Push an item onto the end of the queue.
 	fn push(&mut self, i: Self::Item);
+	/// Push an item onto the front of the queue.
 	fn push_front(&mut self, i: Self::Item);
 
+	/// Pop an item from the start of the queue.
+	/// 
+	/// Returns `None` if the queue is empty.
 	fn pop(&mut self) -> Option<Self::Item>;
 }
 
+/// Ringbuffer implementation based on `RingBufferTransient`
 impl<I, B, M, T> RingBufferTrait<I> for RingBufferTransient<I, B, M, T>
 where
 	I: Codec + EncodeLike,
@@ -57,9 +70,9 @@ where
 		Self::Bounds::put((self.start, self.end));
 	}
 
-	/// Push a bond into the queue to be payed out at a later date.
-	///
-	/// Returns the new end index of the bonds queue.
+	/// Push an item onto the end of the queue.
+	/// 
+	/// Will insert the new item, but will not update the bounds in storage.
 	fn push(&mut self, item: Self::Item) {
 		Self::Map::insert(self.end, item);
 		// this will intentionally overflow and wrap around when bonds_end
@@ -74,6 +87,9 @@ where
 		}
 	}
 
+	/// Push an item onto the front of the queue.
+	/// 
+	/// Equivalent to `push` if the queue is empty.
 	fn push_front(&mut self, item: Self::Item) {
 		if self.start == self.end {
 			<Self as RingBufferTrait<I>>::push(self, item);
@@ -84,6 +100,7 @@ where
 		self.start = index;
 	}
 
+	/// Pop an item from the start of the queue.
 	fn pop(&mut self) -> Option<Self::Item> {
 		if self.start == self.end {
 			return None;
@@ -95,19 +112,13 @@ where
 	}
 }
 
-/// tests for this pallet
 #[cfg(test)]
 mod tests {
 	use super::*;
 	use RingBufferTrait;
-	use itertools::Itertools;
-	use log;
-	use more_asserts::*;
-	use quickcheck::{QuickCheck, TestResult};
-	use rand::{thread_rng, Rng};
-	use std::sync::atomic::{AtomicU64, Ordering};
 
-	use frame_support::{assert_ok, decl_module, decl_storage, impl_outer_origin, parameter_types, weights::Weight};
+	use codec::{Encode, Decode};
+	use frame_support::{decl_module, decl_storage, impl_outer_origin, parameter_types, weights::Weight};
 	use sp_core::H256;
 	use sp_runtime::{
 		testing::Header,
@@ -178,22 +189,23 @@ mod tests {
 	impl Trait for Test {
 	}
 
-	type System = system::Module<Test>;
 	type TestModule = Module<Test>;
 
 	// This function basically just builds a genesis storage key/value store according to
 	// our desired mockup.
 	fn new_test_ext() -> sp_io::TestExternalities {
-		let mut storage = system::GenesisConfig::default().build_storage::<Test>().unwrap();
+		let storage = system::GenesisConfig::default().build_storage::<Test>().unwrap();
 		storage.into()
 	}
 
 	// ------------------------------------------------------------
 	// ringbuffer
 
+	// trait object that we will be interacting with
 	type RingBuffer = dyn RingBufferTrait<
 		SomeStruct,
 		Item = SomeStruct, Bounds = <TestModule as Store>::TestRange, Map = <TestModule as Store>::TestMap>;
+	// implementation that we will instantiate
 	type Transient = RingBufferTransient::<
 		SomeStruct,
 		<TestModule as Store>::TestRange,
