@@ -133,7 +133,7 @@ mod tests {
 		}
 	}
 
-	#[derive(Clone, PartialEq, Encode, Decode, Default)]
+	#[derive(Clone, PartialEq, Encode, Decode, Default, Debug)]
 	pub struct SomeStruct {
 		foo: u16,
 		bar: u32,
@@ -195,7 +195,7 @@ mod tests {
 		SomeStruct,
 		Item = SomeStruct, Bounds = <TestModule as Store>::TestRange, Map = <TestModule as Store>::TestMap>;
 	#[test]
-	fn ringbuffer_test() {
+	fn simple_push() {
 		new_test_ext().execute_with(|| {
 
 			let mut ring : Box<dyn RingBufferTrait<SomeStruct, Item = SomeStruct, Bounds = <TestModule as Store>::TestRange, Map = <TestModule as Store>::TestMap>> = Box::new(
@@ -209,6 +209,8 @@ mod tests {
 			ring.commit();
 			let start_end = TestModule::get_test_range();
 			assert_eq!(start_end, (0, 1));
+			let some_struct = TestModule::get_test_value(0);
+			assert_eq!(some_struct, SomeStruct{foo: 1, bar: 2});
 		})
 	}
 
