@@ -1116,7 +1116,11 @@ mod tests {
 			for i in 1..(u16::max_value() as u64) + 2 {
 				start_end = Stablecoin::push_bond(start_end, Stablecoin::new_bond(i, payout));
 			}
-			assert_eq!(start_end, (1, 0), "range should be inverted because the index wrapped around");
+			assert_eq!(
+				start_end,
+				(1, 0),
+				"range should be inverted because the index wrapped around"
+			);
 
 			let ((start, end), bond) = Stablecoin::pop_bond(start_end);
 			assert_eq!(start..end, 2..0);
@@ -1146,11 +1150,11 @@ mod tests {
 			let start_end = Stablecoin::push_bond_front(start_end, Stablecoin::new_bond(2, payout));
 			assert_eq!(start_end, (0, 1));
 
-			let start_end= Stablecoin::push_bond_front(start_end, Stablecoin::new_bond(2, payout));
+			let start_end = Stablecoin::push_bond_front(start_end, Stablecoin::new_bond(2, payout));
 			assert_eq!(start_end, (u16::max_value(), 1));
 		})
 	}
-	
+
 	// ------------------------------------------------------------
 	// bonds
 	#[test]
