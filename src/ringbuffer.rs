@@ -4,27 +4,29 @@ use frame_support::storage::{StorageValue, StorageMap};
 
 pub type Index = u16;
 
-pub struct RingBufferTransient<T> {
+pub struct RingBufferTransient<T, I, B, M> 
+where T: ?Sized
+{
 	start: Index,
 	end: Index,
-	_t: PhantomData<T>,
+	_t: PhantomData<(I, B, M, T)>,
 }
 
-impl<T, I, B, M> RingBufferTransient<T>
+impl<T, I, B, M> RingBufferTransient<T, I, B, M>
 where
 	I: Codec + EncodeLike,
-	B: StorageValue<(Index, Index), Query = (Index, Index)>,
-	M: StorageMap<Index, I, Query = I>,
-	T: RingBufferTrait<I, B, M, Item = I, Bounds = B, Map = M>
+ 	B: StorageValue<(Index, Index), Query = (Index, Index)>,
+ 	M: StorageMap<Index, I, Query = I>,
+	T: RingBufferTrait<I, Item = I, Bounds = B, Map = M> + ?Sized
 {
 
-	fn new() -> RingBufferTransient<T> {
-		let (start, end) = RingBufferTrait::Bounds::get();
-		RingBufferTransient {start, end, _t: PhantomData }
+	pub fn new() -> RingBufferTransient<T, I, B, M> {
+		let (start, end) = <<T as RingBufferTrait<I>>::Bounds>::get();
+		RingBufferTransient { start, end, _t: PhantomData }
 	}
 }
 
-pub trait RingBufferTrait<I, B, M> 
+pub trait RingBufferTrait<I>
 where
 	I: Codec + EncodeLike,
 {
@@ -40,12 +42,12 @@ where
 	fn pop(&mut self) -> Option<Self::Item>;
 }
 
-impl<T, I, B, M> RingBufferTrait<I, B, M> for RingBufferTransient<T>
+impl<T, I, B, M> RingBufferTrait<I> for RingBufferTransient<T, I, B, M>
 where
 	I: Codec + EncodeLike,
 	B: StorageValue<(Index, Index), Query = (Index, Index)>,
 	M: StorageMap<Index, I, Query = I>,
-	T: RingBufferTrait<I, B, M>,
+	T: RingBufferTrait<I>,
 {
 	type Item = I;
 	type Bounds = B;
@@ -74,7 +76,7 @@ where
 
 	fn push_front(&mut self, item: Self::Item) {
 		if self.start == self.end {
-			<Self as RingBufferTrait<I, B, M>>::push(self, item);
+			<Self as RingBufferTrait<I>>::push(self, item);
 			return;
 		}
 		let index = self.start.wrapping_sub(1);
@@ -97,6 +99,7 @@ where
 #[cfg(test)]
 mod tests {
 	use super::*;
+	use RingBufferTrait;
 	use itertools::Itertools;
 	use log;
 	use more_asserts::*;
@@ -188,15 +191,20 @@ mod tests {
 	// ------------------------------------------------------------
 	// ringbuffer
 
-	type RingBuffer = RingBufferTrait<
-		SomeStruct, <TestModule as Store>::TestRange, <TestModule as Store>::TestMap,
-		Item = SomeStruct, Bounds = <TestModule as Store>::TestRange, Map = <TestModule as Store>::TestMap,
-		Transient = RingBufferTransient>;
+	type RingBuffer = dyn RingBufferTrait<
+		SomeStruct,
+		Item = SomeStruct, Bounds = <TestModule as Store>::TestRange, Map = <TestModule as Store>::TestMap>;
 	#[test]
 	fn ringbuffer_test() {
 		new_test_ext().execute_with(|| {
 
-			let ring = RingBufferTransient::from();
+			let ring : Box<dyn RingBufferTrait<SomeStruct, Item = SomeStruct, Bounds = <TestModule as Store>::TestRange, Map = <TestModule as Store>::TestMap>> = Box::new(
+				RingBufferTransient::<
+					RingBuffer, 
+					SomeStruct,
+					<TestModule as Store>::TestRange,
+					<TestModule as Store>::TestMap
+					>::new());
 			ring.push(SomeStruct{foo: 1, bar: 2});
 			ring.commit();
 			let start_end = TestModule::get_test_range();
