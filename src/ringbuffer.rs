@@ -103,6 +103,9 @@ where
 	///
 	/// Returns `None` if the queue is empty.
 	fn pop(&mut self) -> Option<I>;
+
+	/// Return whether the queue is empty.
+	fn is_empty(&self) -> bool;
 }
 
 /// Ringbuffer implementation based on `RingBufferTransient`
@@ -130,36 +133,45 @@ where
 		// reaches `Index::max_value` because we want a ringbuffer.
 		let next_index = self.end.wrapping_add(1);
 		if next_index == self.start {
-			// overwrite the oldest item in the FIFO ringbuffer
+			// queue presents as empty but is not
+			// --> overwrite the oldest item in the FIFO ringbuffer
 			self.start = self.start.wrapping_add(1);
-			self.end = next_index;
-		} else {
-			self.end = next_index;
 		}
+		self.end = next_index;
 	}
 
 	/// Push an item onto the front of the queue.
 	///
 	/// Equivalent to `push` if the queue is empty.
 	fn push_front(&mut self, item: I) {
-		if self.start == self.end {
-			<Self as RingBufferTrait<I>>::push(self, item);
+		if self.is_empty() {
+			// queue is empty --> regular push
+			self.push(item);
 			return;
 		}
 		let index = self.start.wrapping_sub(1);
 		Self::Map::insert(index, item);
 		self.start = index;
+		if self.start == self.end {
+			// queue presents as empty but is not
+			// --> overwrite the most recent item in the queue
+			self.end = self.end.wrapping_sub(1);
+		}
 	}
 
 	/// Pop an item from the start of the queue.
 	fn pop(&mut self) -> Option<I> {
-		if self.start == self.end {
+		if self.is_empty() {
 			return None;
 		}
 		let item = Self::Map::take(self.start);
 		self.start = self.start.wrapping_add(1);
 
 		item.into()
+	}
+
+	fn is_empty(&self) -> bool {
+		self.start == self.end
 	}
 }
 
@@ -326,7 +338,7 @@ mod tests {
 			ring.commit();
 			let (start, end) = TestModule::get_test_range();
 			assert_eq!(start..end, 2..0);
-			let item = item.expect("a valid bond should be returned");
+			let item = item.expect("an item should be returned");
 			assert_eq!(
 				item.bar, 2,
 				"the struct for field `bar = 2`, was placed at index 1"
@@ -336,7 +348,7 @@ mod tests {
 			ring.commit();
 			let (start, end) = TestModule::get_test_range();
 			assert_eq!(start..end, 3..0);
-			let item = item.expect("a valid bond should be returned");
+			let item = item.expect("an item should be returned");
 			assert_eq!(
 				item.bar, 3,
 				"the struct for field `bar = 3`, was placed at index 2"
@@ -348,6 +360,12 @@ mod tests {
 			ring.commit();
 			let start_end = TestModule::get_test_range();
 			assert_eq!(start_end, (4, 3));
+
+			// push_front should overwrite the most recent entry if the queue is full
+			ring.push_front(SomeStruct { foo: 4, bar: 4});
+			ring.commit();
+			let start_end = TestModule::get_test_range();
+			assert_eq!(start_end, (3, 2));
 		})
 	}
 
