@@ -7,7 +7,10 @@ pub type Index = u16;
 /// Transient backing data that is the backbone of the trait object.
 pub struct RingBufferTransient<I, B, M, T>
 where
-	T: ?Sized,
+	I: Codec + EncodeLike,
+	B: StorageValue<(Index, Index), Query = (Index, Index)>,
+	M: StorageMap<Index, I, Query = I>,
+	T: RingBufferTrait<I, Bounds = B, Map = M> + ?Sized,
 {
 	start: Index,
 	end: Index,
@@ -19,7 +22,7 @@ where
 	I: Codec + EncodeLike,
 	B: StorageValue<(Index, Index), Query = (Index, Index)>,
 	M: StorageMap<Index, I, Query = I>,
-	T: RingBufferTrait<I, Item = I, Bounds = B, Map = M> + ?Sized,
+	T: RingBufferTrait<I, Bounds = B, Map = M> + ?Sized,
 {
 	/// Create a new RingBufferTransient that backs the ringbuffer implementation.
 	///
@@ -34,29 +37,41 @@ where
 	}
 }
 
+impl<I, B, M, T> Drop for RingBufferTransient<I, B, M, T>
+where
+	I: Codec + EncodeLike,
+	B: StorageValue<(Index, Index), Query = (Index, Index)>,
+	M: StorageMap<Index, I, Query = I>,
+	T: RingBufferTrait<I, Bounds = B, Map = M> + ?Sized,
+{
+	fn drop(&mut self) {
+		<Self as RingBufferTrait<I>>::commit(self);
+	}
+}
+
 /// Trait object presenting the ringbuffer interface.
 pub trait RingBufferTrait<I>
 where
 	I: Codec + EncodeLike,
 {
-	type Item: Codec;
 	type Bounds: StorageValue<(Index, Index)>;
 	type Map: StorageMap<Index, I>;
 
 	/// Store all changes made in the underlying storage.
 	///
 	/// Data is not guaranteed to be consistent before this call.
+	/// Will be called by `drop`.
 	fn commit(&self);
 
 	/// Push an item onto the end of the queue.
-	fn push(&mut self, i: Self::Item);
+	fn push(&mut self, i: I);
 	/// Push an item onto the front of the queue.
-	fn push_front(&mut self, i: Self::Item);
+	fn push_front(&mut self, i: I);
 
 	/// Pop an item from the start of the queue.
 	///
 	/// Returns `None` if the queue is empty.
-	fn pop(&mut self) -> Option<Self::Item>;
+	fn pop(&mut self) -> Option<I>;
 }
 
 /// Ringbuffer implementation based on `RingBufferTransient`
@@ -65,12 +80,12 @@ where
 	I: Codec + EncodeLike,
 	B: StorageValue<(Index, Index), Query = (Index, Index)>,
 	M: StorageMap<Index, I, Query = I>,
-	T: RingBufferTrait<I> + ?Sized,
+	T: RingBufferTrait<I, Bounds = B, Map = M> + ?Sized,
 {
-	type Item = I;
 	type Bounds = B;
 	type Map = M;
 
+	/// Commit the (potentially) changed bounds to storage.
 	fn commit(&self) {
 		Self::Bounds::put((self.start, self.end));
 	}
@@ -78,7 +93,7 @@ where
 	/// Push an item onto the end of the queue.
 	///
 	/// Will insert the new item, but will not update the bounds in storage.
-	fn push(&mut self, item: Self::Item) {
+	fn push(&mut self, item: I) {
 		Self::Map::insert(self.end, item);
 		// this will intentionally overflow and wrap around when bonds_end
 		// reaches `Index::max_value` because we want a ringbuffer.
@@ -95,7 +110,7 @@ where
 	/// Push an item onto the front of the queue.
 	///
 	/// Equivalent to `push` if the queue is empty.
-	fn push_front(&mut self, item: Self::Item) {
+	fn push_front(&mut self, item: I) {
 		if self.start == self.end {
 			<Self as RingBufferTrait<I>>::push(self, item);
 			return;
@@ -106,7 +121,7 @@ where
 	}
 
 	/// Pop an item from the start of the queue.
-	fn pop(&mut self) -> Option<Self::Item> {
+	fn pop(&mut self) -> Option<I> {
 		if self.start == self.end {
 			return None;
 		}
@@ -208,7 +223,6 @@ mod tests {
 	// Trait object that we will be interacting with.
 	type RingBuffer = dyn RingBufferTrait<
 		SomeStruct,
-		Item = SomeStruct,
 		Bounds = <TestModule as Store>::TestRange,
 		Map = <TestModule as Store>::TestMap,
 	>;
@@ -226,6 +240,20 @@ mod tests {
 			let mut ring: Box<RingBuffer> = Box::new(Transient::new());
 			ring.push(SomeStruct { foo: 1, bar: 2 });
 			ring.commit();
+			let start_end = TestModule::get_test_range();
+			assert_eq!(start_end, (0, 1));
+			let some_struct = TestModule::get_test_value(0);
+			assert_eq!(some_struct, SomeStruct { foo: 1, bar: 2 });
+		})
+	}
+
+	#[test]
+	fn drop_does_commit() {
+		new_test_ext().execute_with(|| {
+			{
+				let mut ring: Box<RingBuffer> = Box::new(Transient::new());
+				ring.push(SomeStruct { foo: 1, bar: 2 });
+			}
 			let start_end = TestModule::get_test_range();
 			assert_eq!(start_end, (0, 1));
 			let some_struct = TestModule::get_test_value(0);

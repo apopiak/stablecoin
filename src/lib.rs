@@ -588,7 +588,6 @@ impl<T: Trait> Module<T> {
 	fn bonds_transient() -> Box<
 		dyn RingBufferTrait<
 			Bond<T::AccountId, T::BlockNumber>,
-			Item = Bond<T::AccountId, T::BlockNumber>,
 			Bounds = <Self as Store>::BondsRange,
 			Map = <Self as Store>::Bonds,
 		>,
@@ -599,7 +598,6 @@ impl<T: Trait> Module<T> {
 			<Self as Store>::Bonds,
 			dyn RingBufferTrait<
 				Bond<T::AccountId, T::BlockNumber>,
-				Item = Bond<T::AccountId, T::BlockNumber>,
 				Bounds = <Self as Store>::BondsRange,
 				Map = <Self as Store>::Bonds,
 			>,
@@ -613,7 +611,6 @@ impl<T: Trait> Module<T> {
 		for bond in bonds_to_push {
 			bonds.push(bond);
 		}
-		bonds.commit();
 	}
 
 	// ------------------------------------------------------------
@@ -664,7 +661,6 @@ impl<T: Trait> Module<T> {
 				break;
 			}
 		}
-		bonds.commit();
 		// safe to do this late because of the test in the first line of the function
 		// safe to substrate remaining because we initialize it with amount and never increase it
 		let new_supply = coin_supply + amount - remaining;
@@ -884,7 +880,6 @@ mod tests {
 	// Trait object that we will be interacting with.
 	type RingBuffer = dyn RingBufferTrait<
 		BondT,
-		Item = BondT,
 		Bounds = <Stablecoin as Store>::BondsRange,
 		Map = <Stablecoin as Store>::Bonds,
 	>;
