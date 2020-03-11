@@ -557,7 +557,10 @@ impl<T: Trait> Module<T> {
 				bond.expiration,
 			));
 		}
-		Self::push_bonds(new_bonds);
+		let mut bonds = Self::bonds_transient();
+		for bond in new_bonds {
+			bonds.push(bond);
+		}
 		<CoinSupply>::put(new_supply);
 		<BondBids<T>>::put(bids);
 		Self::deposit_event(RawEvent::ContractedSupply(burned));
@@ -602,15 +605,6 @@ impl<T: Trait> Module<T> {
 				Map = <Self as Store>::Bonds,
 			>,
 		>::new())
-	}
-
-	/// Push several bonds into the queue.
-	fn push_bonds(bonds_to_push: VecDeque<Bond<T::AccountId, T::BlockNumber>>) {
-		let mut bonds = Self::bonds_transient();
-
-		for bond in bonds_to_push {
-			bonds.push(bond);
-		}
 	}
 
 	// ------------------------------------------------------------
