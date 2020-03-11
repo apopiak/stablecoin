@@ -1,3 +1,34 @@
+//! # Transient RingBuffer implementation
+//!
+//! This module provides a trait and implementation for a ringbuffer that
+//! abstracts over storage items and presents them as a FIFO queue.
+//!
+//! Usage Example:
+//! ```rust,ignore
+//! use ringbuffer::{RingBufferTrait, RingBufferTransient};
+//!
+//! // Trait object that we will be interacting with.
+//! type RingBuffer = dyn RingBufferTrait<
+//!     SomeStruct,
+//!     Bounds = <TestModule as Store>::TestRange,
+//!     Map = <TestModule as Store>::TestMap,
+//! >;
+//! // Implementation that we will instantiate.
+//! type Transient = RingBufferTransient<
+//!     SomeStruct,
+//!     <TestModule as Store>::TestRange,
+//!     <TestModule as Store>::TestMap,
+//!     RingBuffer,
+//! >;
+//! {
+//!     let mut ring: Box<RingBuffer> = Box::new(Transient::new());
+//!     ring.push(SomeStruct { foo: 1, bar: 2 });
+//! } // `ring.commit()` will be called on `drop` here and syncs to storage
+//! ```
+//!
+//! Note: You might want to introduce a helper function that wraps the complex
+//! types and just returns the boxed trait object.
+
 use codec::{Codec, EncodeLike};
 use core::marker::PhantomData;
 use frame_support::storage::{StorageMap, StorageValue};
