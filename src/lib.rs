@@ -226,6 +226,7 @@ decl_event!(
 decl_error! {
 	/// The possible errors returned by calls to this pallet's functions.
 	pub enum Error for Module<T: Trait> {
+		AlreadyInitialized,
 		CoinSupplyOverflow,
 		CoinSupplyUnderflow,
 		InsufficientBalance,
@@ -234,6 +235,9 @@ decl_error! {
 		GenericOverflow,
 		GenericUnderflow,
 		RoundingError,
+		BondPriceOver100Percent,
+		BondPriceTooLow,
+		BondQuantityTooLow,
 	}
 }
 
@@ -301,7 +305,7 @@ decl_module! {
 		pub fn init(origin) -> DispatchResult {
 			let founder = ensure_signed(origin)?;
 
-			ensure!(!Self::initialized(), "can only be initialized once");
+			ensure!(!Self::initialized(), Error::<T>::AlreadyInitialized);
 
 			// ↑ verify ↑
 			// ↓ update ↓
@@ -325,7 +329,7 @@ decl_module! {
 		pub fn init_with_shareholders(origin, shareholders: Vec<T::AccountId>) -> DispatchResult {
 			let founder = ensure_signed(origin)?;
 
-			ensure!(!Self::initialized(), "can only be initialized once");
+			ensure!(!Self::initialized(), Error::<T>::AlreadyInitialized);
 			ensure!(!shareholders.is_empty(), "need at least one shareholder");
 
 			let len = shareholders.len();
@@ -349,9 +353,9 @@ decl_module! {
 			let sender = ensure_signed(origin)?;
 
 			let sender_balance = Self::get_balance(&sender);
-			let updated_from_balance = sender_balance.checked_sub(amount).ok_or("not enough balance to transfer (underflow)")?;
+			let updated_from_balance = sender_balance.checked_sub(amount).ok_or(Error::<T>::InsufficientBalance)?;
 			let receiver_balance = Self::get_balance(&to);
-			let updated_to_balance = receiver_balance.checked_add(amount).ok_or("overflow for transfer target")?;
+			let updated_to_balance = receiver_balance.checked_add(amount).ok_or(Error::<T>::BalanceOverflow)?;
 
 			// ↑ verify ↑
 			// ↓ update ↓
@@ -377,9 +381,9 @@ decl_module! {
 		pub fn bid_for_bond(origin, price: Perbill, quantity: Coins) -> DispatchResult {
 			let who = ensure_signed(origin)?;
 
-			ensure!(price <= Perbill::from_percent(100), "price cannot be higher than 100%");
-			ensure!(price > T::MinimumBondPrice::get(), "price is lower than the minimum bond price");
-			ensure!(quantity >= T::BaseUnit::get(), "quantity is lower than the base unit");
+			ensure!(price <= Perbill::from_percent(100), Error::<T>::BondPriceOver100Percent);
+			ensure!(price > T::MinimumBondPrice::get(), Error::<T>::BondPriceTooLow);
+			ensure!(quantity >= T::BaseUnit::get(), Error::<T>::BondQuantityTooLow);
 
 			let bid = Bid::new(who.clone(), price, quantity);
 
