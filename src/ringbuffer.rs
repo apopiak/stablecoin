@@ -362,7 +362,7 @@ mod tests {
 			assert_eq!(start_end, (4, 3));
 
 			// push_front should overwrite the most recent entry if the queue is full
-			ring.push_front(SomeStruct { foo: 4, bar: 4});
+			ring.push_front(SomeStruct { foo: 4, bar: 4 });
 			ring.commit();
 			let start_end = TestModule::get_test_range();
 			assert_eq!(start_end, (3, 2));

@@ -118,7 +118,7 @@ pub trait Trait: system::Trait {
 	/// The maximum amount of bids allowed in the queue. Used to prevent the queue from growing forever.
 	type MaximumBids: Get<u64>;
 	/// The minimum percentage to pay for a bond.
-	/// 
+	///
 	/// The [Basis Whitepaper](https://www.basis.io/basis_whitepaper_en.pdf) recommends a minimum
 	/// bond price of 10% based on simulations.
 	type MinimumBondPrice: Get<Perbill>;
