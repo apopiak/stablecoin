@@ -106,6 +106,8 @@ pub trait Trait: system::Trait {
 	/// The overarching event type.
 	type Event: From<Event<Self>> + Into<<Self as system::Trait>::Event>;
 
+	/// Number of Share tokens per shareholder at initialization.
+	type InitialShares: Get<u64>;
 	/// The amount of coins necessary to buy the tracked value.
 	type CoinPrice: FetchPrice<Coins>;
 	/// The expiration time of a bond.
@@ -114,7 +116,12 @@ pub trait Trait: system::Trait {
 	/// period of 5 years.
 	type ExpirationPeriod: Get<<Self as system::Trait>::BlockNumber>;
 	/// The maximum amount of bids allowed in the queue. Used to prevent the queue from growing forever.
-	type MaximumBids: Get<usize>;
+	type MaximumBids: Get<u64>;
+	/// The minimum percentage to pay for a bond.
+	/// 
+	/// The [Basis Whitepaper](https://www.basis.io/basis_whitepaper_en.pdf) recommends a minimum
+	/// bond price of 10% based on simulations.
+	type MinimumBondPrice: Get<Perbill>;
 	/// The frequency of adjustments of the coin supply.
 	type AdjustmentFrequency: Get<<Self as system::Trait>::BlockNumber>;
 	/// The amount of Coins that are meant to track the value. Example: A value of 1000 when tracking
@@ -125,13 +132,6 @@ pub trait Trait: system::Trait {
 	/// The minimum amount of Coins in circulation.
 	type MinimumSupply: Get<Coins>;
 }
-
-// Number of Share tokens, fixed at genesis.
-const SHARE_SUPPLY: u64 = 100;
-
-// The [Basis Whitepaper](https://www.basis.io/basis_whitepaper_en.pdf) recommends
-// 10% based on simulations.
-const MINIMUM_BOND_PRICE: Perbill = Perbill::from_percent(10);
 
 /// A bond representing (potential) future payout of coins.
 ///
@@ -249,9 +249,6 @@ impl<T: Trait> From<BidError> for Error<T> {
 // This pallet's storage items.
 decl_storage! {
 	trait Store for Module<T: Trait> as Stablecoin {
-		/// The minimum percentage to pay for a bond.
-		MinimumBondPrice get(fn minimum_bond_price): Perbill = MINIMUM_BOND_PRICE;
-
 		/// Whether the stablecoin is initialized.
 		Init get(fn initialized): bool = false;
 
@@ -284,6 +281,16 @@ decl_storage! {
 // The pallet's dispatchable functions.
 decl_module! {
 	pub struct Module<T: Trait> for enum Call where origin: T::Origin {
+		/// The minimum percentage to pay for a bond.
+		const MinimumBondPrice: Perbill = T::MinimumBondPrice::get();
+		/// The expiration period for a bond.
+		const ExpirationPeriod: T::BlockNumber = T::ExpirationPeriod::get();
+		/// The amount of stablecoins that represent 1 external value.
+		const BaseUnit: Coins = T::BaseUnit::get();
+		/// The maximum amount of bids in the bidding queue.
+		const MaximumBids: u64 = T::MaximumBids::get();
+		/// How often the coin supply will be adjusted based on price.
+		const AdjustmentFrequency: T::BlockNumber = T::AdjustmentFrequency::get();
 
 		fn deposit_event() = default;
 
@@ -299,7 +306,7 @@ decl_module! {
 			// ↑ verify ↑
 			// ↓ update ↓
 
-			<Shares<T>>::put(vec![(founder.clone(), SHARE_SUPPLY)]);
+			<Shares<T>>::put(vec![(founder.clone(), T::InitialShares::get())]);
 
 			<Balance<T>>::insert(&founder, T::InitialSupply::get());
 			<CoinSupply>::put(T::InitialSupply::get());
@@ -322,8 +329,8 @@ decl_module! {
 			ensure!(!shareholders.is_empty(), "need at least one shareholder");
 
 			let len = shareholders.len();
-			// give one share to each shareholder
-			let shares: Vec<(T::AccountId, u64)> = shareholders.into_iter().zip(iter::repeat(1).take(len)).collect();
+			// give initial shares to each shareholder
+			let shares: Vec<(T::AccountId, u64)> = shareholders.into_iter().zip(iter::repeat(T::InitialShares::get()).take(len)).collect();
 
 			// ↑ verify ↑
 			Self::hand_out_coins(&shares, T::InitialSupply::get(), Self::coin_supply())?;
@@ -367,20 +374,20 @@ decl_module! {
 		/// Example: `bid_for_bond(origin, Perbill::from_percent(80), 5 * BaseUnit)` will bid
 		/// for a bond with a payout of `5 * BaseUnit` coins for a price of
 		/// `0.8 * 5 * BaseUnit = 4 * BaseUnit` coins.
-		pub fn bid_for_bond(origin, price_per_bond: Perbill, quantity: Coins) -> DispatchResult {
+		pub fn bid_for_bond(origin, price: Perbill, quantity: Coins) -> DispatchResult {
 			let who = ensure_signed(origin)?;
 
-			ensure!(price_per_bond <= Perbill::from_percent(100), "price cannot be higher than 100%");
-			ensure!(price_per_bond > MINIMUM_BOND_PRICE, "price is lower than the minimum bond price");
+			ensure!(price <= Perbill::from_percent(100), "price cannot be higher than 100%");
+			ensure!(price > T::MinimumBondPrice::get(), "price is lower than the minimum bond price");
 			ensure!(quantity >= T::BaseUnit::get(), "quantity is lower than the base unit");
 
-			let bid = Bid::new(who.clone(), price_per_bond, quantity);
+			let bid = Bid::new(who.clone(), price, quantity);
 
 			// ↑ verify ↑
 			Self::remove_balance(&who, bid.payment())?;
 			// ↓ update ↓
 			Self::add_bid(bid);
-			Self::deposit_event(RawEvent::NewBid(who, price_per_bond, quantity));
+			Self::deposit_event(RawEvent::NewBid(who, price, quantity));
 
 			Ok(())
 		}
@@ -462,11 +469,11 @@ impl<T: Trait> Module<T> {
 			.binary_search_by(|&Bid { price, .. }| price.cmp(&bid.price))
 			.unwrap_or_else(|i| i);
 		bids.insert(index, bid);
-		if bids.len() > T::MaximumBids::get() {
+		if bids.len() as u64 > T::MaximumBids::get() {
 			Self::refund_bid(&bids.remove(0));
 		}
 		debug_assert!(
-			bids.len() <= T::MaximumBids::get(),
+			bids.len() as u64 <= T::MaximumBids::get(),
 			"there should never be more than MaximumBids"
 		);
 	}
@@ -812,12 +819,14 @@ mod tests {
 		// expire bonds quickly in tests
 		pub const ExpirationPeriod: u64 = 100;
 		// allow few bids
-		pub const MaximumBids: usize = 10;
+		pub const MaximumBids: u64 = 10;
 		// adjust supply every second block
 		pub const AdjustmentFrequency: u64 = 2;
 		pub const BaseUnit: u64 = BASE_UNIT;
 		pub const InitialSupply: u64 = 100 * BaseUnit::get();
 		pub const MinimumSupply: u64 = BaseUnit::get();
+		pub const InitialShares: u64 = 1;
+		pub const MinimumBondPrice: Perbill = Perbill::from_percent(10);
 	}
 
 	type AccountId = u64;
@@ -854,6 +863,8 @@ mod tests {
 		type BaseUnit = BaseUnit;
 		type InitialSupply = InitialSupply;
 		type MinimumSupply = MinimumSupply;
+		type InitialShares = InitialShares;
+		type MinimumBondPrice = MinimumBondPrice;
 	}
 
 	type System = system::Module<Test>;
@@ -972,7 +983,7 @@ mod tests {
 				Stablecoin::add_bid(Bid::new(1, Perbill::from_percent(25), bid_amount));
 			}
 
-			assert_eq!(Stablecoin::bond_bids().len(), MaximumBids::get());
+			assert_eq!(Stablecoin::bond_bids().len() as u64, MaximumBids::get());
 		});
 	}
 
@@ -987,7 +998,7 @@ mod tests {
 				assert_ok!(Stablecoin::bid_for_bond(Origin::signed(1), price, quantity));
 			}
 
-			assert_eq!(Stablecoin::bond_bids().len(), MaximumBids::get());
+			assert_eq!(Stablecoin::bond_bids().len() as u64, MaximumBids::get());
 			let expected = InitialSupply::get() - price * quantity * (MaximumBids::get() as u64);
 			assert_eq!(Stablecoin::get_balance(1), expected);
 		});
