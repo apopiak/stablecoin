@@ -85,8 +85,10 @@ use sp_std::collections::vec_deque::VecDeque;
 use sp_std::iter;
 use system::ensure_signed;
 
+mod ringbuffer;
 mod utils;
 
+use ringbuffer::{RingBufferTrait, RingBufferTransient};
 use utils::saturated_mul;
 
 /// Expected price oracle interface. `fetch_price` must return the amount of coins exchanged for the tracked value.
@@ -555,7 +557,10 @@ impl<T: Trait> Module<T> {
 				bond.expiration,
 			));
 		}
-		Self::push_bonds(new_bonds);
+		let mut bonds = Self::bonds_transient();
+		for bond in new_bonds {
+			bonds.push(bond);
+		}
 		<CoinSupply>::put(new_supply);
 		<BondBids<T>>::put(bids);
 		Self::deposit_event(RawEvent::ContractedSupply(burned));
@@ -583,55 +588,23 @@ impl<T: Trait> Module<T> {
 		}
 	}
 
-	/// Push several bonds into the queue.
-	fn push_bonds(bonds: VecDeque<Bond<T::AccountId, T::BlockNumber>>) {
-		let (prev_bonds_start, prev_bonds_end) = Self::bonds_range();
-		let mut start_end = (prev_bonds_start, prev_bonds_end);
-		for bond in bonds {
-			start_end = Self::push_bond(start_end, bond);
-		}
-		<BondsRange>::put(start_end);
-	}
-
-	/// Push a bond into the queue to be payed out at a later date.
-	///
-	/// Returns the new end index of the bonds queue.
-	fn push_bond(
-		(bonds_start, bonds_end): (BondIndex, BondIndex),
-		bond: Bond<T::AccountId, T::BlockNumber>,
-	) -> (BondIndex, BondIndex) {
-		<Bonds<T>>::insert(bonds_end, bond);
-		// this will intentionally overflow and wrap around when bonds_end
-		// reaches `BondIndex::max_value` because we want a ringbuffer.
-		let next_index = bonds_end.wrapping_add(1);
-		if next_index == bonds_start {
-			// overwrite the oldest item in the FIFO ringbuffer
-			(bonds_start.wrapping_add(1), next_index)
-		} else {
-			(bonds_start, next_index)
-		}
-	}
-
-	fn pop_bond(
-		(bonds_start, bonds_end): (BondIndex, BondIndex),
-	) -> ((BondIndex, BondIndex), Option<Bond<T::AccountId, T::BlockNumber>>) {
-		if bonds_start == bonds_end {
-			return ((bonds_start, bonds_end), None);
-		}
-		let bond = <Bonds<T>>::take(bonds_start);
-		((bonds_start.wrapping_add(1), bonds_end), bond.into())
-	}
-
-	fn push_bond_front(
-		(bonds_start, bonds_end): (BondIndex, BondIndex),
-		bond: Bond<T::AccountId, T::BlockNumber>,
-	) -> (BondIndex, BondIndex) {
-		if bonds_start == bonds_end {
-			return Self::push_bond((bonds_start, bonds_end), bond);
-		}
-		let index = bonds_start.wrapping_sub(1);
-		<Bonds<T>>::insert(index, bond);
-		(index, bonds_end)
+	fn bonds_transient() -> Box<
+		dyn RingBufferTrait<
+			Bond<T::AccountId, T::BlockNumber>,
+			Bounds = <Self as Store>::BondsRange,
+			Map = <Self as Store>::Bonds,
+		>,
+	> {
+		Box::new(RingBufferTransient::<
+			Bond<T::AccountId, T::BlockNumber>,
+			<Self as Store>::BondsRange,
+			<Self as Store>::Bonds,
+			dyn RingBufferTrait<
+				Bond<T::AccountId, T::BlockNumber>,
+				Bounds = <Self as Store>::BondsRange,
+				Map = <Self as Store>::Bonds,
+			>,
+		>::new())
 	}
 
 	// ------------------------------------------------------------
@@ -648,21 +621,14 @@ impl<T: Trait> Module<T> {
 			.ok_or(Error::<T>::CoinSupplyOverflow)?;
 		// ↑ verify ↑
 		let mut remaining = amount;
-		let (prev_bonds_start, prev_bonds_end) = Self::bonds_range();
-		let mut start_end = (prev_bonds_start, prev_bonds_end);
-		let mut pop;
+		let mut bonds = Self::bonds_transient();
 		// ↓ update ↓
 		while let Some(Bond {
 			account,
 			payout,
 			expiration,
-		}) = if remaining > 0 {
-			pop = Self::pop_bond(start_end);
-			start_end = pop.0;
-			pop.1
-		} else {
-			None
-		} {
+		}) = if remaining > 0 { bonds.pop() } else { None }
+		{
 			// bond has expired --> discard
 			if <system::Module<T>>::block_number() >= expiration {
 				Self::deposit_event(RawEvent::BondExpired(account, payout));
@@ -680,23 +646,15 @@ impl<T: Trait> Module<T> {
 				// this is safe because we are in the else branch where payout > remaining
 				let payout = payout - remaining;
 				Self::add_balance(&account, remaining);
-				start_end = Self::push_bond_front(
-					start_end,
-					Bond {
-						account: account.clone(),
-						payout,
-						expiration,
-					},
-				);
+				bonds.push_front(Bond {
+					account: account.clone(),
+					payout,
+					expiration,
+				});
 				Self::deposit_event(RawEvent::BondPartiallyFulfilled(account, payout));
 				break;
 			}
 		}
-		let (bonds_start, mut bonds_end) = start_end;
-		if bonds_start == bonds_end && <Bonds<T>>::contains_key(bonds_start) {
-			bonds_end = bonds_end.wrapping_add(1);
-		}
-		<BondsRange>::put((bonds_start, bonds_end));
 		// safe to do this late because of the test in the first line of the function
 		// safe to substrate remaining because we initialize it with amount and never increase it
 		let new_supply = coin_supply + amount - remaining;
@@ -862,14 +820,17 @@ mod tests {
 		pub const MinimumSupply: u64 = BaseUnit::get();
 	}
 
+	type AccountId = u64;
+	type BlockNumber = u64;
+
 	impl system::Trait for Test {
 		type Origin = Origin;
 		type Call = ();
 		type Index = u64;
-		type BlockNumber = u64;
+		type BlockNumber = BlockNumber;
 		type Hash = H256;
 		type Hashing = BlakeTwo256;
-		type AccountId = u64;
+		type AccountId = AccountId;
 		type Lookup = IdentityLookup<Self::AccountId>;
 		type Header = Header;
 		type Event = ();
@@ -909,10 +870,25 @@ mod tests {
 
 	// ------------------------------------------------------------
 	// utils
-	fn add_bond(bond: Bond<u64, u64>) {
-		let (start, end) = Stablecoin::bonds_range();
-		let (start, end) = Stablecoin::push_bond((start, end), bond);
-		<Stablecoin as crate::Store>::BondsRange::put((start, end));
+	type BondT = Bond<AccountId, BlockNumber>;
+	// Trait object that we will be interacting with.
+	type RingBuffer = dyn RingBufferTrait<
+		BondT,
+		Bounds = <Stablecoin as Store>::BondsRange,
+		Map = <Stablecoin as Store>::Bonds,
+	>;
+	// Implementation that we will instantiate.
+	type Transient = RingBufferTransient<
+		BondT,
+		<Stablecoin as Store>::BondsRange,
+		<Stablecoin as Store>::Bonds,
+		RingBuffer,
+	>;
+
+	fn add_bond(bond: BondT) {
+		let mut bonds: Box<RingBuffer> = Box::new(Transient::new());
+		bonds.push(bond);
+		bonds.commit();
 	}
 
 	// ------------------------------------------------------------
@@ -1075,82 +1051,6 @@ mod tests {
 		});
 	}
 
-	// ------------------------------------------------------------
-	// ringbuffer
-
-	#[test]
-	fn ringbuffer_push_bond() {
-		new_test_ext().execute_with(|| {
-			assert_ok!(Stablecoin::init(Origin::signed(1)));
-
-			let start_end = Stablecoin::bonds_range();
-			let payout = Fixed64::from_rational(20, 100).saturated_multiply_accumulate(BaseUnit::get());
-			let (start, end) = Stablecoin::push_bond(start_end, Stablecoin::new_bond(2, payout));
-			assert_eq!(start..end, 0..1);
-		})
-	}
-
-	#[test]
-	fn ringbuffer_pop_bond() {
-		new_test_ext().execute_with(|| {
-			assert_ok!(Stablecoin::init(Origin::signed(1)));
-
-			let start_end = Stablecoin::bonds_range();
-			let payout = Fixed64::from_rational(20, 100).saturated_multiply_accumulate(BaseUnit::get());
-			let (start, end) = Stablecoin::push_bond(start_end, Stablecoin::new_bond(2, payout));
-			assert_eq!(start..end, 0..1);
-
-			let ((start, end), bond) = Stablecoin::pop_bond((start, end));
-			assert!(bond.is_some());
-			assert_eq!(start..end, 1..1);
-		})
-	}
-
-	#[test]
-	fn ringbuffer_wrap_around() {
-		new_test_ext().execute_with(|| {
-			assert_ok!(Stablecoin::init(Origin::signed(1)));
-
-			let mut start_end = Stablecoin::bonds_range();
-			let payout = Fixed64::from_rational(20, 100).saturated_multiply_accumulate(BaseUnit::get());
-			for i in 1..(u16::max_value() as u64) + 2 {
-				start_end = Stablecoin::push_bond(start_end, Stablecoin::new_bond(i, payout));
-			}
-			assert_eq!(start_end, (1, 0), "range should be inverted because the index wrapped around");
-
-			let ((start, end), bond) = Stablecoin::pop_bond(start_end);
-			assert_eq!(start..end, 2..0);
-			let bond = bond.expect("a valid bond should be returned");
-			assert_eq!(bond.account, 2, "the bond for account 2, was placed at index 1");
-
-			let ((start, end), bond) = Stablecoin::pop_bond((start, end));
-			assert_eq!(start..end, 3..0);
-			let bond = bond.expect("a valid bond should be returned");
-			assert_eq!(bond.account, 3, "the bond for account 3, was placed at index 2");
-
-			start_end = (start, end);
-			for i in 1..4 {
-				start_end = Stablecoin::push_bond(start_end, Stablecoin::new_bond(i, payout));
-			}
-			assert_eq!(start_end, (4, 3));
-		})
-	}
-
-	#[test]
-	fn ringbuffer_push_front() {
-		new_test_ext().execute_with(|| {
-			assert_ok!(Stablecoin::init(Origin::signed(1)));
-
-			let start_end = Stablecoin::bonds_range();
-			let payout = Fixed64::from_rational(20, 100).saturated_multiply_accumulate(BaseUnit::get());
-			let start_end = Stablecoin::push_bond_front(start_end, Stablecoin::new_bond(2, payout));
-			assert_eq!(start_end, (0, 1));
-
-			let start_end= Stablecoin::push_bond_front(start_end, Stablecoin::new_bond(2, payout));
-			assert_eq!(start_end, (u16::max_value(), 1));
-		})
-	}
-	
 	// ------------------------------------------------------------
 	// bonds
 	#[test]
