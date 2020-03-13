@@ -105,8 +105,6 @@ pub trait Trait: system::Trait {
 	/// The overarching event type.
 	type Event: From<Event<Self>> + Into<<Self as system::Trait>::Event>;
 
-	/// Number of Share tokens per shareholder at initialization.
-	type InitialShares: Get<u64>;
 	/// The amount of coins necessary to buy the tracked value.
 	type CoinPrice: FetchPrice<Coins>;
 	/// The expiration time of a bond.
@@ -785,7 +783,6 @@ mod tests {
 		pub const BaseUnit: u64 = BASE_UNIT;
 		pub const InitialSupply: u64 = 100 * BaseUnit::get();
 		pub const MinimumSupply: u64 = BaseUnit::get();
-		pub const InitialShares: u64 = 1;
 		pub const MinimumBondPrice: Perbill = Perbill::from_percent(10);
 	}
 
@@ -823,7 +820,6 @@ mod tests {
 		type BaseUnit = BaseUnit;
 		type InitialSupply = InitialSupply;
 		type MinimumSupply = MinimumSupply;
-		type InitialShares = InitialShares;
 		type MinimumBondPrice = MinimumBondPrice;
 	}
 
