@@ -836,7 +836,7 @@ mod tests {
 		let mut storage = system::GenesisConfig::default().build_storage::<Test>().unwrap();
 		let shareholders: Vec<(AccountId, u64)> = vec![1, 2, 3, 4, 5, 6, 7, 8, 9, 10]
 			.into_iter()
-			.zip(iter::repeat(1).take(10))
+			.zip(iter::repeat(1))
 			.collect();
 		// make sure to run our storage build function to check config
 		let _ = GenesisConfig::<Test> { shareholders }.assimilate_storage(&mut storage);
@@ -845,9 +845,8 @@ mod tests {
 
 	fn new_test_ext_with(shareholders: Vec<AccountId>) -> sp_io::TestExternalities {
 		let mut storage = system::GenesisConfig::default().build_storage::<Test>().unwrap();
-		let len = shareholders.len();
 		let shareholders: Vec<(AccountId, u64)> =
-			shareholders.into_iter().zip(iter::repeat(1).take(len)).collect();
+			shareholders.into_iter().zip(iter::repeat(1)).collect();
 		// make sure to run our storage build function to check config
 		let _ = GenesisConfig::<Test> { shareholders }.assimilate_storage(&mut storage);
 		storage.into()
