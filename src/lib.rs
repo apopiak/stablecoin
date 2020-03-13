@@ -82,7 +82,6 @@ use frame_support::{
 use num_rational::Ratio;
 use sp_runtime::{traits::CheckedMul, Fixed64, PerThing, Perbill};
 use sp_std::collections::vec_deque::VecDeque;
-use sp_std::iter;
 use system::ensure_signed;
 
 mod ringbuffer;
@@ -106,8 +105,6 @@ pub trait Trait: system::Trait {
 	/// The overarching event type.
 	type Event: From<Event<Self>> + Into<<Self as system::Trait>::Event>;
 
-	/// Number of Share tokens per shareholder at initialization.
-	type InitialShares: Get<u64>;
 	/// The amount of coins necessary to buy the tracked value.
 	type CoinPrice: FetchPrice<Coins>;
 	/// The expiration time of a bond.
@@ -253,9 +250,6 @@ impl<T: Trait> From<BidError> for Error<T> {
 // This pallet's storage items.
 decl_storage! {
 	trait Store for Module<T: Trait> as Stablecoin {
-		/// Whether the stablecoin is initialized.
-		Init get(fn initialized): bool = false;
-
 		/// The allocation of shares to accounts.
 		Shares get(fn shares): Vec<(T::AccountId, u64)>;
 
@@ -263,7 +257,7 @@ decl_storage! {
 		Balance get(fn get_balance): map hasher(blake2_128_concat) T::AccountId => Coins;
 
 		/// The total amount of coins in circulation.
-		CoinSupply get(fn coin_supply): Coins;
+		CoinSupply get(fn coin_supply): Coins = 0;
 
 		/// The available bonds for contracting supply.
 		Bonds get(fn get_bond): map hasher(twox_64_concat) BondIndex => Bond<T::AccountId, T::BlockNumber>;
@@ -273,11 +267,20 @@ decl_storage! {
 		BondBids get(fn bond_bids): Vec<Bid<T::AccountId>>;
 	}
 	add_extra_genesis {
-		build(|_config: &GenesisConfig| {
+		config(shareholders):
+			Vec<(T::AccountId, u64)>;
+		build(|config: &GenesisConfig<T>| {
 			assert!(
 				T::MinimumSupply::get() < T::InitialSupply::get(),
 				"initial coin supply needs to be greater than the minimum"
 			);
+
+			assert!(!config.shareholders.is_empty(), "need at least one shareholder");
+			// TODO: make sure shareholders are unique?
+
+			<Module<T>>::hand_out_coins(&config.shareholders, T::InitialSupply::get(), <Module<T>>::coin_supply()).expect("initialization handout should not fail");
+
+			<Shares<T>>::put(&config.shareholders);
 		});
 	}
 }
@@ -297,56 +300,6 @@ decl_module! {
 		const AdjustmentFrequency: T::BlockNumber = T::AdjustmentFrequency::get();
 
 		fn deposit_event() = default;
-
-		/// Initialize the stablecoin.
-		///
-		/// Sender of the transaction will be the founder.
-		/// Initial coin supply will be allocated to the founder.
-		pub fn init(origin) -> DispatchResult {
-			let founder = ensure_signed(origin)?;
-
-			ensure!(!Self::initialized(), Error::<T>::AlreadyInitialized);
-
-			// ↑ verify ↑
-			// ↓ update ↓
-
-			<Shares<T>>::put(vec![(founder.clone(), T::InitialShares::get())]);
-
-			<Balance<T>>::insert(&founder, T::InitialSupply::get());
-			<CoinSupply>::put(T::InitialSupply::get());
-
-			<Init>::put(true);
-
-			Self::deposit_event(RawEvent::Initialized(founder));
-
-			Ok(())
-		}
-
-		/// Initialize the coin with the given `shareholders`.
-		///
-		/// Sender of the transaction will be the founder.
-		/// Initial coin supply will be distributed evenly to the shareholders.
-		pub fn init_with_shareholders(origin, shareholders: Vec<T::AccountId>) -> DispatchResult {
-			let founder = ensure_signed(origin)?;
-
-			ensure!(!Self::initialized(), Error::<T>::AlreadyInitialized);
-			ensure!(!shareholders.is_empty(), "need at least one shareholder");
-
-			let len = shareholders.len();
-			// give initial shares to each shareholder
-			let shares: Vec<(T::AccountId, u64)> = shareholders.into_iter().zip(iter::repeat(T::InitialShares::get()).take(len)).collect();
-
-			// ↑ verify ↑
-			Self::hand_out_coins(&shares, T::InitialSupply::get(), Self::coin_supply())?;
-			// ↓ update ↓
-
-			<Shares<T>>::put(shares);
-			<Init>::put(true);
-
-			Self::deposit_event(RawEvent::Initialized(founder));
-
-			Ok(())
-		}
 
 		/// Transfer `amount` coins from the sender to the account `to`.
 		pub fn transfer(origin, to: T::AccountId, amount: u64) -> DispatchResult {
@@ -784,6 +737,7 @@ mod tests {
 		traits::{BlakeTwo256, IdentityLookup},
 		Perbill,
 	};
+	use sp_std::iter;
 	use system;
 
 	impl_outer_origin! {
@@ -829,7 +783,6 @@ mod tests {
 		pub const BaseUnit: u64 = BASE_UNIT;
 		pub const InitialSupply: u64 = 100 * BaseUnit::get();
 		pub const MinimumSupply: u64 = BaseUnit::get();
-		pub const InitialShares: u64 = 1;
 		pub const MinimumBondPrice: Perbill = Perbill::from_percent(10);
 	}
 
@@ -867,7 +820,6 @@ mod tests {
 		type BaseUnit = BaseUnit;
 		type InitialSupply = InitialSupply;
 		type MinimumSupply = MinimumSupply;
-		type InitialShares = InitialShares;
 		type MinimumBondPrice = MinimumBondPrice;
 	}
 
@@ -878,8 +830,21 @@ mod tests {
 	// our desired mockup.
 	fn new_test_ext() -> sp_io::TestExternalities {
 		let mut storage = system::GenesisConfig::default().build_storage::<Test>().unwrap();
+		let shareholders: Vec<(AccountId, u64)> = vec![1, 2, 3, 4, 5, 6, 7, 8, 9, 10]
+			.into_iter()
+			.zip(iter::repeat(1))
+			.collect();
 		// make sure to run our storage build function to check config
-		let _ = GenesisConfig::default().assimilate_storage::<Test>(&mut storage);
+		let _ = GenesisConfig::<Test> { shareholders }.assimilate_storage(&mut storage);
+		storage.into()
+	}
+
+	fn new_test_ext_with(shareholders: Vec<AccountId>) -> sp_io::TestExternalities {
+		let mut storage = system::GenesisConfig::default().build_storage::<Test>().unwrap();
+		let shareholders: Vec<(AccountId, u64)> =
+			shareholders.into_iter().zip(iter::repeat(1)).collect();
+		// make sure to run our storage build function to check config
+		let _ = GenesisConfig::<Test> { shareholders }.assimilate_storage(&mut storage);
 		storage.into()
 	}
 
@@ -908,28 +873,9 @@ mod tests {
 
 	// ------------------------------------------------------------
 	// init tests
-
 	#[test]
-	fn init_and_transfer() {
+	fn init_test() {
 		new_test_ext().execute_with(|| {
-			assert_ok!(Stablecoin::init(Origin::signed(1)));
-
-			let amount = 42;
-			assert_ok!(Stablecoin::transfer(Origin::signed(1), 2, amount));
-
-			assert_eq!(Stablecoin::get_balance(1), InitialSupply::get() - amount);
-			assert_eq!(Stablecoin::get_balance(2), amount);
-		});
-	}
-
-	#[test]
-	fn init_with_shareholders_test() {
-		new_test_ext().execute_with(|| {
-			assert_ok!(Stablecoin::init_with_shareholders(
-				Origin::signed(1),
-				vec![1, 2, 3, 4, 5, 6, 7, 8, 9, 10]
-			));
-
 			let shares = Stablecoin::shares();
 			assert_eq!(
 				shares,
@@ -956,8 +902,6 @@ mod tests {
 	#[test]
 	fn bids_are_sorted_highest_to_lowest() {
 		new_test_ext().execute_with(|| {
-			assert_ok!(Stablecoin::init(Origin::signed(1)));
-
 			let bid_amount = 5 * BaseUnit::get();
 			Stablecoin::add_bid(Bid::new(1, Perbill::from_percent(25), bid_amount));
 			Stablecoin::add_bid(Bid::new(1, Perbill::from_percent(33), bid_amount));
@@ -980,8 +924,6 @@ mod tests {
 	#[test]
 	fn amount_of_bids_is_limited() {
 		new_test_ext().execute_with(|| {
-			assert_ok!(Stablecoin::init(Origin::signed(1)));
-
 			let bid_amount = 5 * BaseUnit::get();
 			for _i in 0..(2 * MaximumBids::get()) {
 				Stablecoin::add_bid(Bid::new(1, Perbill::from_percent(25), bid_amount));
@@ -993,9 +935,7 @@ mod tests {
 
 	#[test]
 	fn truncated_bids_are_refunded() {
-		new_test_ext().execute_with(|| {
-			assert_ok!(Stablecoin::init(Origin::signed(1)));
-
+		new_test_ext_with(vec![1]).execute_with(|| {
 			let price = Perbill::from_percent(25);
 			let quantity = BaseUnit::get();
 			for _i in 0..(MaximumBids::get() + 1) {
@@ -1011,8 +951,6 @@ mod tests {
 	#[test]
 	fn cancel_all_bids_test() {
 		new_test_ext().execute_with(|| {
-			assert_ok!(Stablecoin::init(Origin::signed(1)));
-
 			let bid_amount = 5 * BaseUnit::get();
 			Stablecoin::add_bid(Bid::new(1, Perbill::from_percent(25), bid_amount));
 			Stablecoin::add_bid(Bid::new(2, Perbill::from_percent(33), bid_amount));
@@ -1033,8 +971,6 @@ mod tests {
 	#[test]
 	fn cancel_selected_bids_test() {
 		new_test_ext().execute_with(|| {
-			assert_ok!(Stablecoin::init(Origin::signed(1)));
-
 			let bid_amount = 5 * BaseUnit::get();
 			Stablecoin::add_bid(Bid::new(1, Perbill::from_percent(25), bid_amount));
 			Stablecoin::add_bid(Bid::new(2, Perbill::from_percent(33), bid_amount));
@@ -1071,8 +1007,6 @@ mod tests {
 	#[test]
 	fn adding_bonds() {
 		new_test_ext().execute_with(|| {
-			assert_ok!(Stablecoin::init(Origin::signed(1)));
-
 			let payout = Fixed64::from_rational(20, 100).saturated_multiply_accumulate(BaseUnit::get());
 			add_bond(Stablecoin::new_bond(3, payout));
 
@@ -1086,8 +1020,7 @@ mod tests {
 
 	#[test]
 	fn expire_bonds() {
-		new_test_ext().execute_with(|| {
-			assert_ok!(Stablecoin::init(Origin::signed(1)));
+		new_test_ext_with(vec![1]).execute_with(|| {
 			let acc = 3;
 			let prev_acc_balance = Stablecoin::get_balance(acc);
 			let payout = Fixed64::from_rational(20, 100).saturated_multiply_accumulate(BaseUnit::get());
@@ -1118,9 +1051,7 @@ mod tests {
 
 	#[test]
 	fn expire_bonds_and_expand_supply() {
-		new_test_ext().execute_with(|| {
-			assert_ok!(Stablecoin::init(Origin::signed(1)));
-
+		new_test_ext_with(vec![1]).execute_with(|| {
 			let first_acc = 3;
 			let prev_first_acc_balance = Stablecoin::get_balance(first_acc);
 			// 1.2 * BaseUnit
@@ -1204,10 +1135,6 @@ mod tests {
 	#[test]
 	fn simple_handout_test() {
 		new_test_ext().execute_with(|| {
-			assert_ok!(Stablecoin::init_with_shareholders(
-				Origin::signed(1),
-				vec![1, 2, 3, 4, 5, 6, 7, 8, 9, 10]
-			));
 			let balance_per_acc = InitialSupply::get() / 10;
 			assert_eq!(Stablecoin::get_balance(1), balance_per_acc);
 			assert_eq!(Stablecoin::get_balance(10), balance_per_acc);
@@ -1231,10 +1158,6 @@ mod tests {
 	#[test]
 	fn handout_less_than_shares_test() {
 		new_test_ext().execute_with(|| {
-			assert_ok!(Stablecoin::init_with_shareholders(
-				Origin::signed(1),
-				vec![1, 2, 3, 4, 5, 6, 7, 8, 9, 10]
-			));
 			let balance_per_acc = InitialSupply::get() / 10;
 			assert_eq!(Stablecoin::get_balance(1), balance_per_acc);
 			assert_eq!(Stablecoin::get_balance(10), balance_per_acc);
@@ -1260,10 +1183,6 @@ mod tests {
 	#[test]
 	fn handout_more_than_shares_test() {
 		new_test_ext().execute_with(|| {
-			assert_ok!(Stablecoin::init_with_shareholders(
-				Origin::signed(1),
-				vec![1, 2, 3, 4, 5, 6, 7, 8, 9, 10]
-			));
 			let balance_per_acc = InitialSupply::get() / 10;
 			assert_eq!(Stablecoin::get_balance(1), balance_per_acc);
 			assert_eq!(Stablecoin::get_balance(10), balance_per_acc);
@@ -1287,31 +1206,27 @@ mod tests {
 
 	#[test]
 	fn handout_quickcheck() {
-		fn property(shareholders: Vec<u64>, amount: Coins) -> TestResult {
-			new_test_ext().execute_with(|| {
-				if amount == 0 {
-					return TestResult::discard();
-				}
+		fn property(shareholders: Vec<AccountId>, amount: Coins) -> TestResult {
+			let len = shareholders.len();
+			if amount == 0 {
+				return TestResult::discard();
+			}
+			// Expects between 1 and 999 shareholders.
+			if len < 1 || len > 999 {
+				return TestResult::discard();
+			}
+			// 0 is not a valid AccountId
+			if shareholders.iter().any(|s| *s == 0) {
+				return TestResult::discard();
+			}
+			// make sure shareholders are distinct
+			if shareholders.iter().unique().count() != len {
+				return TestResult::discard();
+			}
 
-				// Expects between 1 and 999 shareholders.
-				let len = shareholders.len();
-				if len < 1 || len > 999 {
-					return TestResult::discard();
-				}
+			let first = shareholders[0];
 
-				if shareholders.iter().any(|s| *s == 0) {
-					return TestResult::discard();
-				}
-
-				if shareholders.iter().unique().count() != len {
-					return TestResult::discard();
-				}
-
-				assert_ok!(Stablecoin::init_with_shareholders(
-					Origin::signed(1),
-					shareholders.clone()
-				));
-
+			new_test_ext_with(shareholders).execute_with(|| {
 				let amount = amount;
 				// this assert might actually produce a false positive
 				// as there might be errors returned that are the correct
@@ -1324,7 +1239,7 @@ mod tests {
 
 				let len = len as u64;
 				let payout = amount;
-				let balance = Stablecoin::get_balance(shareholders[0]);
+				let balance = Stablecoin::get_balance(first);
 				assert_ge!(balance, InitialSupply::get() / len + payout / len);
 				assert_le!(balance, InitialSupply::get() / len + 1 + payout / len + 1);
 
@@ -1344,11 +1259,6 @@ mod tests {
 	#[test]
 	fn expand_supply_test() {
 		new_test_ext().execute_with(|| {
-			assert_ok!(Stablecoin::init_with_shareholders(
-				Origin::signed(1),
-				vec![1, 2, 3, 4, 5, 6, 7, 8, 9, 10]
-			));
-
 			// payout of 120% of BaseUnit
 			let payout = Fixed64::from_rational(20, 100).saturated_multiply_accumulate(BaseUnit::get());
 			add_bond(Stablecoin::new_bond(2, payout));
@@ -1380,11 +1290,6 @@ mod tests {
 	#[test]
 	fn contract_supply_test() {
 		new_test_ext().execute_with(|| {
-			assert_ok!(Stablecoin::init_with_shareholders(
-				Origin::signed(1),
-				vec![1, 2, 3, 4, 5, 6, 7, 8, 9, 10]
-			));
-
 			let bond_amount = Ratio::new(125, 100)
 				.checked_mul(&BaseUnit::get().into())
 				.map(|r| r.to_integer())
@@ -1427,11 +1332,6 @@ mod tests {
 					return TestResult::discard();
 				}
 
-				assert_ok!(Stablecoin::init_with_shareholders(
-					Origin::signed(1),
-					vec![1, 2, 3, 4, 5, 6, 7, 8, 9, 10]
-				));
-
 				for (account, payout) in bonds {
 					if account > 0 && payout > 0 {
 						add_bond(Stablecoin::new_bond(account, payout));
@@ -1464,11 +1364,6 @@ mod tests {
 			let bonds: Vec<(u64, u64)> = (0..100)
 				.map(|_| (rng.gen_range(1, 200), rng.gen_range(1, 10 * BaseUnit::get())))
 				.collect();
-
-			assert_ok!(Stablecoin::init_with_shareholders(
-				Origin::signed(1),
-				vec![1, 2, 3, 4, 5, 6, 7, 8, 9, 10]
-			));
 
 			for (account, payout) in bonds {
 				add_bond(Stablecoin::new_bond(account, payout));
