@@ -1,0 +1,16 @@
+{
+    "Address": "AccountId",
+    "LookupSource": "AccountId",
+    "Coins": "u64",
+    "BondIndex": "u16",
+    "Bid": {
+      "account": "AccountId",
+      "price": "Perbill",
+      "quantity": "Coins"
+    },
+    "Bond": {
+      "account": "AccountId",
+      "payout": "Coins",
+      "expiration": "BlockNumber"
+    }
+  }
