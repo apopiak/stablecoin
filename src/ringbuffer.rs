@@ -55,9 +55,9 @@ where
 	M: StorageMap<Index, I, Query = I>,
 	T: RingBufferTrait<I, Bounds = B, Map = M> + ?Sized,
 {
-	/// Create a new RingBufferTransient that backs the ringbuffer implementation.
+	/// Create a new `RingBufferTransient` that backs the ringbuffer implementation.
 	///
-	/// Initializes itself from the Bounds.
+	/// Initializes itself from the `Bounds` storage.
 	pub fn new() -> RingBufferTransient<I, B, M, T> {
 		let (start, end) = <<T as RingBufferTrait<I>>::Bounds>::get();
 		RingBufferTransient {
@@ -75,6 +75,7 @@ where
 	M: StorageMap<Index, I, Query = I>,
 	T: RingBufferTrait<I, Bounds = B, Map = M> + ?Sized,
 {
+	/// Commit on `drop`.
 	fn drop(&mut self) {
 		<Self as RingBufferTrait<I>>::commit(self);
 	}
@@ -91,7 +92,8 @@ where
 	/// Store all changes made in the underlying storage.
 	///
 	/// Data is not guaranteed to be consistent before this call.
-	/// Will be called by `drop`.
+	/// 
+	/// Implementation note: Call in `drop` to increase ergonomics.
 	fn commit(&self);
 
 	/// Push an item onto the end of the queue.
@@ -143,6 +145,8 @@ where
 	/// Push an item onto the front of the queue.
 	///
 	/// Equivalent to `push` if the queue is empty.
+	/// 
+	/// Will insert the new item, but will not update the bounds in storage.
 	fn push_front(&mut self, item: I) {
 		if self.is_empty() {
 			// queue is empty --> regular push
@@ -155,11 +159,14 @@ where
 		if self.start == self.end {
 			// queue presents as empty but is not
 			// --> overwrite the most recent item in the queue
+			// TODO: Should we remove the item at the new `end` index?
 			self.end = self.end.wrapping_sub(1);
 		}
 	}
 
 	/// Pop an item from the start of the queue.
+	/// 
+	/// Will remove the item, but will not update the bounds in storage.
 	fn pop(&mut self) -> Option<I> {
 		if self.is_empty() {
 			return None;
@@ -170,6 +177,7 @@ where
 		item.into()
 	}
 
+	/// Return whether to consider the queue empty.
 	fn is_empty(&self) -> bool {
 		self.start == self.end
 	}

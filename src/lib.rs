@@ -450,7 +450,8 @@ impl<T: Trait> Module<T> {
 	/// Add a bid to the given queue, making sure to sort it from highest to lowest price.
 	///
 	/// Truncates the bids to `MaximumBids` to keep the queue bounded.
-	// TODO: use priority queue (binaryheap?)
+	// TODO: Investigate use of a (more "proper") priority queue (binary heap?).
+	// 	     Would need to allow removing the smallest item to be of bounded size.
 	// TODO: be careful with malicious actor who would constantly bid an amount equal
 	//		 to the last bid in the queue and evict people on purpose.
 	fn _add_bid_to(bid: Bid<T::AccountId>, bids: &mut Vec<Bid<T::AccountId>>) {
@@ -468,7 +469,7 @@ impl<T: Trait> Module<T> {
 		);
 	}
 
-	/// Refund the coins payed for `bid` to it account.
+	/// Refund the coins payed for `bid` to the account that bid.
 	fn refund_bid(bid: &Bid<T::AccountId>) {
 		Self::add_balance(&bid.account, bid.payment());
 		Self::deposit_event(RawEvent::RefundedBid(bid.account.clone(), bid.payment()));
@@ -481,7 +482,6 @@ impl<T: Trait> Module<T> {
 	{
 		let mut bids = Self::bond_bids();
 
-		// ↓ update ↓
 		bids.retain(|b| {
 			if cancel_for(b) {
 				Self::refund_bid(b);
@@ -513,6 +513,7 @@ impl<T: Trait> Module<T> {
 			let mut bid = bids
 				.pop()
 				.expect("checked whether queue is empty on previous line; qed");
+			// the current bid can cover all the remaining contraction
 			if bid.payment() >= remaining {
 				match bid.remove_coins(remaining) {
 					Err(_e) => {
@@ -567,11 +568,6 @@ impl<T: Trait> Module<T> {
 	// ------------------------------------------------------------
 	// bonds
 
-	// Idea:
-	// Implement the Ringbuffer as a transient struct that you fill with
-	// certain Storage entries that will be managed by it and encapsulate
-	// the right behavior.
-
 	/// Create a new bond for the given `account` with the given `payout`.
 	///
 	/// Expiration is calculated based on the current `block_number` and the configured
@@ -585,6 +581,9 @@ impl<T: Trait> Module<T> {
 		}
 	}
 
+	/// Create a new transient storage adapter that manages the bonds.
+	/// 
+	/// Allows pushing and popping on a ringbuffer without managing the storage details.
 	fn bonds_transient() -> Box<
 		dyn RingBufferTrait<
 			Bond<T::AccountId, T::BlockNumber>,
