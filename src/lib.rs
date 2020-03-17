@@ -40,6 +40,7 @@
 //! parameter_types! {
 //!     pub const ExpirationPeriod: BlockNumber = 5 * 365 * DAYS; // 5 years = 5 * 365 * DAYS
 //!     pub const MaximumBids: usize = 1_000;
+//!     pub const MinimumBondPrice: Perbill = Perbill::from_percent(10);
 //!     pub const AdjustmentFrequency: BlockNumber = 1 * MINUTES; // 1 minute = 60000 / MILLISECS_PER_BLOCK
 //!     pub const BaseUnit: Coins = 1_000_000;
 //!     pub const InitialSupply: Coins = 1000 * BaseUnit::get();
@@ -52,6 +53,7 @@
 //!     type CoinPrice = some_price_oracle::Module<Runtime>;
 //!     type ExpirationPeriod = ExpirationPeriod;
 //!     type MaximumBids = MaximumBids;
+//!     type MinimumBondPrice = MinimumBondPrice;
 //!     type AdjustmentFrequency = AdjustmentFrequency;
 //!     type BaseUnit = BaseUnit;
 //!     type InitialSupply = InitialSupply;
@@ -105,7 +107,7 @@ pub trait Trait: system::Trait {
 	/// The overarching event type.
 	type Event: From<Event<Self>> + Into<<Self as system::Trait>::Event>;
 
-	/// The amount of coins necessary to buy the tracked value.
+	/// The amount of coins necessary to buy the tracked value. (e.g., 1_100 for 1$)
 	type CoinPrice: FetchPrice<Coins>;
 	/// The expiration time of a bond.
 	///
@@ -121,18 +123,23 @@ pub trait Trait: system::Trait {
 	type MinimumBondPrice: Get<Perbill>;
 	/// The frequency of adjustments of the coin supply.
 	type AdjustmentFrequency: Get<<Self as system::Trait>::BlockNumber>;
-	/// The amount of Coins that are meant to track the value. Example: A value of 1000 when tracking
-	/// Dollars means that the Stablecoin will try to maintain a price of 1000 Coins for 1$.
+	/// The amount of Coins that are meant to track the value. Example: A value of 1_000 when tracking
+	/// Dollars means that the Stablecoin will try to maintain a price of 1_000 Coins for 1$.
 	type BaseUnit: Get<Coins>;
 	/// The initial supply of Coins.
 	type InitialSupply: Get<Coins>;
 	/// The minimum amount of Coins in circulation.
+	///
+	/// Must be higher than `InitialSupply`.
 	type MinimumSupply: Get<Coins>;
 }
 
 /// A bond representing (potential) future payout of coins.
 ///
 /// Expires at block `expiration` so it will be discarded if payed out after that block.
+///
+/// + `account` is the recipient of the bond payout.
+/// + `payout` is the amount of Coins payed out.
 #[derive(Encode, Decode, Default, Clone, PartialEq, PartialOrd, Eq, Ord)]
 #[cfg_attr(feature = "std", derive(Debug))]
 pub struct Bond<AccountId, BlockNumber> {
@@ -143,6 +150,7 @@ pub struct Bond<AccountId, BlockNumber> {
 
 /// A bid for a bond of the stablecoin at a certain price.
 ///
+/// + `account` is the bidder.
 /// + `price` is a percentage of 1 coin.
 /// + `quantity` is the amount of coins gained on payout of the corresponding bond.
 #[derive(Encode, Decode, Default, Clone, PartialEq)]
@@ -178,12 +186,11 @@ impl<AccountId> Bid<AccountId> {
 	/// Remove `coins` amount of coins from the bid, mirroring the changes in quantity
 	/// according to the price attached to the bid.
 	fn remove_coins(&mut self, coins: Coins) -> Result<Coins, BidError> {
-		// Inverse price is needed because self.price converts from amount of bond payout coins to payment coins,
+		// Inverse price is needed because `self.price` converts from amount of bond payout coins to payment coins,
 		// but we need to convert the other way from payment coins to bond payout coins.
-		// TODO clearer documentation
-		// self.price == fraction of coins I'm willing to pay now in exchange for a bond.
+		// `self.price` equals the fraction of coins I'm willing to pay now in exchange for a bond.
 		// But we need to calculate the amount of bond payouts corresponding to the coins I'm willing to pay now
-		// (which means we need to use the inverse of self.price!)
+		// which means we need to use the inverse of self.price!
 		let inverse_price: Ratio<u64> = Ratio::new(Perbill::ACCURACY.into(), self.price.deconstruct().into());
 
 		// Should never overflow, but better safe than sorry.
@@ -205,17 +212,27 @@ decl_event!(
 		AccountId = <T as system::Trait>::AccountId,
 		BlockNumber = <T as system::Trait>::BlockNumber,
 	{
-		Initialized(AccountId),
+		/// Successful transfer from the first to the second account.
 		Transfer(AccountId, AccountId, u64),
+		/// New bid was registered for the account at given price and amount.
 		NewBid(AccountId, Perbill, u64),
+		/// A bid was refunded (repayed and removed from the queue).
 		RefundedBid(AccountId, u64),
+		/// A new bond was created for the account with payout and expiration.
 		NewBond(AccountId, u64, BlockNumber),
+		/// A bond was payed out to the account.
 		BondFulfilled(AccountId, u64),
+		/// A bond was partially payed out to the account.
 		BondPartiallyFulfilled(AccountId, u64),
+		/// A bond expired and was removed from the bond queue.
 		BondExpired(AccountId, u64),
+		/// All bids below the given price were cancelled for the account.
 		CancelledBidsBelow(AccountId, Perbill),
+		/// All bids were cancelled for the account.
 		CancelledBids(AccountId),
+		/// The supply was expanded by the amount.
 		ExpandedSupply(u64),
+		/// The supply was contracted by the amount.
 		ContractedSupply(u64),
 	}
 );
@@ -223,17 +240,23 @@ decl_event!(
 decl_error! {
 	/// The possible errors returned by calls to this pallet's functions.
 	pub enum Error for Module<T: Trait> {
-		AlreadyInitialized,
+		/// While trying to expand the supply, it overflowed.
 		CoinSupplyOverflow,
+		/// While trying to contract the supply, it underflowed.
 		CoinSupplyUnderflow,
+		/// The account trying to use funds (e.g., for bidding) does not have enough balance.
 		InsufficientBalance,
+		/// While trying to increase the balance for an account, it overflowed.
 		BalanceOverflow,
+		/// Something went very wrong and the price of the currency is zero.
 		ZeroPrice,
 		GenericOverflow,
 		GenericUnderflow,
-		RoundingError,
+		/// The bidder tried to pay more than 100% for a bond.
 		BondPriceOver100Percent,
+		/// The bidding price is below `MinimumBondPrice`.
 		BondPriceTooLow,
+		/// The bond being bid for is not big enough (in amount of Coins).
 		BondQuantityTooLow,
 	}
 }
@@ -251,6 +274,10 @@ impl<T: Trait> From<BidError> for Error<T> {
 decl_storage! {
 	trait Store for Module<T: Trait> as Stablecoin {
 		/// The allocation of shares to accounts.
+		///
+		/// This is a `Vec` and thus should be limited to few shareholders (< 1_000).
+		/// In principle it would be possible to make shares tradeable. In that case
+		/// we would have to use a map similar to the `Balance` one.
 		Shares get(fn shares): Vec<(T::AccountId, u64)>;
 
 		/// The balance of stablecoin associated with each account.
@@ -261,6 +288,7 @@ decl_storage! {
 
 		/// The available bonds for contracting supply.
 		Bonds get(fn get_bond): map hasher(twox_64_concat) BondIndex => Bond<T::AccountId, T::BlockNumber>;
+		/// Start and end index pair used to implement a ringbuffer on top of the `Bonds` map.
 		BondsRange get(fn bonds_range): (BondIndex, BondIndex) = (0, 0);
 
 		/// The current bidding queue for bonds.
@@ -278,8 +306,11 @@ decl_storage! {
 			assert!(!config.shareholders.is_empty(), "need at least one shareholder");
 			// TODO: make sure shareholders are unique?
 
-			<Module<T>>::hand_out_coins(&config.shareholders, T::InitialSupply::get(), <Module<T>>::coin_supply()).expect("initialization handout should not fail");
+			// Hand out the initial coin supply to the shareholders.
+			<Module<T>>::hand_out_coins(&config.shareholders, T::InitialSupply::get(), <Module<T>>::coin_supply())
+				.expect("initialization handout should not fail");
 
+			// Store the shareholders with their shares.
 			<Shares<T>>::put(&config.shareholders);
 		});
 	}
@@ -292,12 +323,14 @@ decl_module! {
 		const MinimumBondPrice: Perbill = T::MinimumBondPrice::get();
 		/// The expiration period for a bond.
 		const ExpirationPeriod: T::BlockNumber = T::ExpirationPeriod::get();
-		/// The amount of stablecoins that represent 1 external value.
+		/// The amount of stablecoins that represent 1 external value (e.g., 1$).
 		const BaseUnit: Coins = T::BaseUnit::get();
 		/// The maximum amount of bids in the bidding queue.
 		const MaximumBids: u64 = T::MaximumBids::get();
 		/// How often the coin supply will be adjusted based on price.
 		const AdjustmentFrequency: T::BlockNumber = T::AdjustmentFrequency::get();
+		/// The minimum amount of Coins that will be in circulation.
+		const MinimumSupply: Coins = T::MinimumSupply::get();
 
 		fn deposit_event() = default;
 
@@ -323,10 +356,10 @@ decl_module! {
 			Ok(())
 		}
 
-		/// Bid for `quantity` coins at a price of `price_per_bond`.
+		/// Bid for `quantity` coins at a `price`.
 		///
-		/// Price is a fraction of the desired payout quantity.
-		/// Expects a `quantity` of a least `BaseUnit`.
+		/// + `price` is a fraction of the desired payout quantity (e.g., 80%).
+		/// + Expects a `quantity` of a least `BaseUnit`.
 		///
 		/// Example: `bid_for_bond(origin, Perbill::from_percent(80), 5 * BaseUnit)` will bid
 		/// for a bond with a payout of `5 * BaseUnit` coins for a price of
@@ -841,8 +874,7 @@ mod tests {
 
 	fn new_test_ext_with(shareholders: Vec<AccountId>) -> sp_io::TestExternalities {
 		let mut storage = system::GenesisConfig::default().build_storage::<Test>().unwrap();
-		let shareholders: Vec<(AccountId, u64)> =
-			shareholders.into_iter().zip(iter::repeat(1)).collect();
+		let shareholders: Vec<(AccountId, u64)> = shareholders.into_iter().zip(iter::repeat(1)).collect();
 		// make sure to run our storage build function to check config
 		let _ = GenesisConfig::<Test> { shareholders }.assimilate_storage(&mut storage);
 		storage.into()
