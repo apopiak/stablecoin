@@ -587,6 +587,7 @@ impl<T: Trait> Module<T> {
 	fn bonds_transient() -> Box<
 		dyn RingBufferTrait<
 			Bond<T::AccountId, T::BlockNumber>,
+			BondIndex,
 			Bounds = <Self as Store>::BondsRange,
 			Map = <Self as Store>::Bonds,
 		>,
@@ -597,9 +598,11 @@ impl<T: Trait> Module<T> {
 			<Self as Store>::Bonds,
 			dyn RingBufferTrait<
 				Bond<T::AccountId, T::BlockNumber>,
+				BondIndex,
 				Bounds = <Self as Store>::BondsRange,
 				Map = <Self as Store>::Bonds,
 			>,
+			BondIndex,
 		>::new())
 	}
 
@@ -885,6 +888,7 @@ mod tests {
 	// Trait object that we will be interacting with.
 	type RingBuffer = dyn RingBufferTrait<
 		BondT,
+		BondIndex,
 		Bounds = <Stablecoin as Store>::BondsRange,
 		Map = <Stablecoin as Store>::Bonds,
 	>;
@@ -894,6 +898,7 @@ mod tests {
 		<Stablecoin as Store>::BondsRange,
 		<Stablecoin as Store>::Bonds,
 		RingBuffer,
+		BondIndex,
 	>;
 
 	fn add_bond(bond: BondT) {
