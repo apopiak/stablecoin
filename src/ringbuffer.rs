@@ -33,33 +33,58 @@ use codec::{Codec, EncodeLike};
 use core::marker::PhantomData;
 use frame_support::storage::{StorageMap, StorageValue};
 
-pub type Index = u16;
+pub trait WrappingOps
+{
+	fn wrapping_add(self, rhs: Self) -> Self;
+	fn wrapping_sub(self, rhs: Self) -> Self;
+}
 
+macro_rules! impl_wrapping_ops {
+	($type:ty) => {
+		impl WrappingOps for $type {
+			fn wrapping_add(self, rhs: Self) -> Self {
+				self.wrapping_add(rhs)
+			}
+			fn wrapping_sub(self, rhs: Self) -> Self {
+				self.wrapping_sub(rhs)
+			}
+		}
+	};
+}
+
+impl_wrapping_ops!(u8);
+impl_wrapping_ops!(u16);
+impl_wrapping_ops!(u32);
+impl_wrapping_ops!(u64);
+
+type DefaultIdx = u16;
 /// Transient backing data that is the backbone of the trait object.
-pub struct RingBufferTransient<I, B, M, T>
+pub struct RingBufferTransient<Item, B, M, T, Index = DefaultIdx>
 where
-	I: Codec + EncodeLike,
+	Item: Codec + EncodeLike,
 	B: StorageValue<(Index, Index), Query = (Index, Index)>,
-	M: StorageMap<Index, I, Query = I>,
-	T: RingBufferTrait<I, Bounds = B, Map = M> + ?Sized,
+	M: StorageMap<Index, Item, Query = Item>,
+	T: RingBufferTrait<Item, Index, Bounds = B, Map = M> + ?Sized,
+	Index: Codec + EncodeLike + Eq + WrappingOps + From<u8> + Copy,
 {
 	start: Index,
 	end: Index,
-	_t: PhantomData<(I, B, M, T)>,
+	_t: PhantomData<(Item, B, M, T)>,
 }
 
-impl<I, B, M, T> RingBufferTransient<I, B, M, T>
+impl<Item, B, M, T, Index> RingBufferTransient<Item, B, M, T, Index>
 where
-	I: Codec + EncodeLike,
+	Item: Codec + EncodeLike,
 	B: StorageValue<(Index, Index), Query = (Index, Index)>,
-	M: StorageMap<Index, I, Query = I>,
-	T: RingBufferTrait<I, Bounds = B, Map = M> + ?Sized,
+	M: StorageMap<Index, Item, Query = Item>,
+	T: RingBufferTrait<Item, Index, Bounds = B, Map = M> + ?Sized,
+	Index: Codec + EncodeLike + Eq + WrappingOps + From<u8> + Copy,
 {
 	/// Create a new `RingBufferTransient` that backs the ringbuffer implementation.
 	///
 	/// Initializes itself from the `Bounds` storage.
-	pub fn new() -> RingBufferTransient<I, B, M, T> {
-		let (start, end) = <<T as RingBufferTrait<I>>::Bounds>::get();
+	pub fn new() -> RingBufferTransient<Item, B, M, T, Index> {
+		let (start, end) = <<T as RingBufferTrait<Item, Index>>::Bounds>::get();
 		RingBufferTransient {
 			start,
 			end,
@@ -68,26 +93,28 @@ where
 	}
 }
 
-impl<I, B, M, T> Drop for RingBufferTransient<I, B, M, T>
+impl<Item, B, M, T, Index> Drop for RingBufferTransient<Item, B, M, T, Index>
 where
-	I: Codec + EncodeLike,
+	Item: Codec + EncodeLike,
 	B: StorageValue<(Index, Index), Query = (Index, Index)>,
-	M: StorageMap<Index, I, Query = I>,
-	T: RingBufferTrait<I, Bounds = B, Map = M> + ?Sized,
+	M: StorageMap<Index, Item, Query = Item>,
+	T: RingBufferTrait<Item, Index, Bounds = B, Map = M> + ?Sized,
+	Index: Codec + EncodeLike + Eq + WrappingOps + From<u8> + Copy,
 {
 	/// Commit on `drop`.
 	fn drop(&mut self) {
-		<Self as RingBufferTrait<I>>::commit(self);
+		<Self as RingBufferTrait<Item, Index>>::commit(self);
 	}
 }
 
 /// Trait object presenting the ringbuffer interface.
-pub trait RingBufferTrait<I>
+pub trait RingBufferTrait<Item, Index = DefaultIdx>
 where
-	I: Codec + EncodeLike,
+	Item: Codec + EncodeLike,
+	Index: Codec + EncodeLike,
 {
 	type Bounds: StorageValue<(Index, Index)>;
-	type Map: StorageMap<Index, I>;
+	type Map: StorageMap<Index, Item>;
 
 	/// Store all changes made in the underlying storage.
 	///
@@ -97,26 +124,27 @@ where
 	fn commit(&self);
 
 	/// Push an item onto the end of the queue.
-	fn push(&mut self, i: I);
+	fn push(&mut self, i: Item);
 	/// Push an item onto the front of the queue.
-	fn push_front(&mut self, i: I);
+	fn push_front(&mut self, i: Item);
 
 	/// Pop an item from the start of the queue.
 	///
 	/// Returns `None` if the queue is empty.
-	fn pop(&mut self) -> Option<I>;
+	fn pop(&mut self) -> Option<Item>;
 
 	/// Return whether the queue is empty.
 	fn is_empty(&self) -> bool;
 }
 
 /// Ringbuffer implementation based on `RingBufferTransient`
-impl<I, B, M, T> RingBufferTrait<I> for RingBufferTransient<I, B, M, T>
+impl<Item, B, M, T, Index> RingBufferTrait<Item, Index> for RingBufferTransient<Item, B, M, T, Index>
 where
-	I: Codec + EncodeLike,
+	Item: Codec + EncodeLike,
 	B: StorageValue<(Index, Index), Query = (Index, Index)>,
-	M: StorageMap<Index, I, Query = I>,
-	T: RingBufferTrait<I, Bounds = B, Map = M> + ?Sized,
+	M: StorageMap<Index, Item, Query = Item>,
+	T: RingBufferTrait<Item, Index, Bounds = B, Map = M> + ?Sized,
+	Index: Codec + EncodeLike + Eq + WrappingOps + From<u8> + Copy,
 {
 	type Bounds = B;
 	type Map = M;
@@ -129,15 +157,15 @@ where
 	/// Push an item onto the end of the queue.
 	///
 	/// Will insert the new item, but will not update the bounds in storage.
-	fn push(&mut self, item: I) {
+	fn push(&mut self, item: Item) {
 		Self::Map::insert(self.end, item);
 		// this will intentionally overflow and wrap around when bonds_end
 		// reaches `Index::max_value` because we want a ringbuffer.
-		let next_index = self.end.wrapping_add(1);
+		let next_index = self.end.wrapping_add(1.into());
 		if next_index == self.start {
 			// queue presents as empty but is not
 			// --> overwrite the oldest item in the FIFO ringbuffer
-			self.start = self.start.wrapping_add(1);
+			self.start = self.start.wrapping_add(1.into());
 		}
 		self.end = next_index;
 	}
@@ -147,32 +175,32 @@ where
 	/// Equivalent to `push` if the queue is empty.
 	/// 
 	/// Will insert the new item, but will not update the bounds in storage.
-	fn push_front(&mut self, item: I) {
+	fn push_front(&mut self, item: Item) {
 		if self.is_empty() {
 			// queue is empty --> regular push
 			self.push(item);
 			return;
 		}
-		let index = self.start.wrapping_sub(1);
+		let index = self.start.wrapping_sub(1.into());
 		Self::Map::insert(index, item);
 		self.start = index;
 		if self.start == self.end {
 			// queue presents as empty but is not
 			// --> overwrite the most recent item in the queue
 			// TODO: Should we remove the item at the new `end` index?
-			self.end = self.end.wrapping_sub(1);
+			self.end = self.end.wrapping_sub(1.into());
 		}
 	}
 
 	/// Pop an item from the start of the queue.
 	/// 
 	/// Will remove the item, but will not update the bounds in storage.
-	fn pop(&mut self) -> Option<I> {
+	fn pop(&mut self) -> Option<Item> {
 		if self.is_empty() {
 			return None;
 		}
 		let item = Self::Map::take(self.start);
-		self.start = self.start.wrapping_add(1);
+		self.start = self.start.wrapping_add(1.into());
 
 		item.into()
 	}
@@ -215,6 +243,8 @@ mod tests {
 		}
 	}
 
+	type TestIdx = u8;
+
 	#[derive(Clone, PartialEq, Encode, Decode, Default, Debug)]
 	pub struct SomeStruct {
 		foo: u64,
@@ -223,8 +253,8 @@ mod tests {
 
 	decl_storage! {
 		trait Store for Module<T: Trait> as RingBufferTest {
-			TestMap get(fn get_test_value): map hasher(twox_64_concat) Index => SomeStruct;
-			TestRange get(fn get_test_range): (Index, Index) = (0, 0);
+			TestMap get(fn get_test_value): map hasher(twox_64_concat) TestIdx => SomeStruct;
+			TestRange get(fn get_test_range): (TestIdx, TestIdx) = (0, 0);
 		}
 	}
 
@@ -274,6 +304,7 @@ mod tests {
 	// Trait object that we will be interacting with.
 	type RingBuffer = dyn RingBufferTrait<
 		SomeStruct,
+		TestIdx,
 		Bounds = <TestModule as Store>::TestRange,
 		Map = <TestModule as Store>::TestMap,
 	>;
@@ -283,6 +314,7 @@ mod tests {
 		<TestModule as Store>::TestRange,
 		<TestModule as Store>::TestMap,
 		RingBuffer,
+		TestIdx
 	>;
 
 	#[test]
@@ -331,7 +363,7 @@ mod tests {
 		new_test_ext().execute_with(|| {
 			let mut ring: Box<RingBuffer> = Box::new(Transient::new());
 
-			for i in 1..(u16::max_value() as u64) + 2 {
+			for i in 1..(TestIdx::max_value() as u64) + 2 {
 				ring.push(SomeStruct { foo: 42, bar: i });
 			}
 			ring.commit();
@@ -389,7 +421,7 @@ mod tests {
 			ring.push_front(SomeStruct { foo: 20, bar: 42 });
 			ring.commit();
 			let start_end = TestModule::get_test_range();
-			assert_eq!(start_end, (u16::max_value(), 1));
+			assert_eq!(start_end, (TestIdx::max_value(), 1));
 		})
 	}
 }
