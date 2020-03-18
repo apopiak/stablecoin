@@ -585,23 +585,12 @@ impl<T: Trait> Module<T> {
 	/// 
 	/// Allows pushing and popping on a ringbuffer without managing the storage details.
 	fn bonds_transient() -> Box<
-		dyn RingBufferTrait<
-			Bond<T::AccountId, T::BlockNumber>,
-			BondIndex,
-			Bounds = <Self as Store>::BondsRange,
-			Map = <Self as Store>::Bonds,
-		>,
+		dyn RingBufferTrait<Bond<T::AccountId, T::BlockNumber>>,
 	> {
 		Box::new(RingBufferTransient::<
 			Bond<T::AccountId, T::BlockNumber>,
 			<Self as Store>::BondsRange,
 			<Self as Store>::Bonds,
-			dyn RingBufferTrait<
-				Bond<T::AccountId, T::BlockNumber>,
-				BondIndex,
-				Bounds = <Self as Store>::BondsRange,
-				Map = <Self as Store>::Bonds,
-			>,
 			BondIndex,
 		>::new())
 	}
@@ -886,18 +875,12 @@ mod tests {
 	// utils
 	type BondT = Bond<AccountId, BlockNumber>;
 	// Trait object that we will be interacting with.
-	type RingBuffer = dyn RingBufferTrait<
-		BondT,
-		BondIndex,
-		Bounds = <Stablecoin as Store>::BondsRange,
-		Map = <Stablecoin as Store>::Bonds,
-	>;
+	type RingBuffer = dyn RingBufferTrait<BondT>;
 	// Implementation that we will instantiate.
 	type Transient = RingBufferTransient<
 		BondT,
 		<Stablecoin as Store>::BondsRange,
 		<Stablecoin as Store>::Bonds,
-		RingBuffer,
 		BondIndex,
 	>;
 
