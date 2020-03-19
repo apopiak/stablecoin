@@ -1,3 +1,36 @@
+//! # Transient Bounded Priority Queue Implementation
+//!
+//! This module provides a trait and implementation for a bounded priority queue
+//! that abstracts over a `Vec` in storage.
+//!
+//! Usage Example:
+//! ```rust,ignore
+//! use queue::{BoundedPriorityQueueTrait, PriorityQueueTransient};
+//! 
+//! parameter_types! {
+//!     pub const MaximumLength: u64 = 42;
+//! }
+//!
+//! // Trait object that we will be interacting with.
+//! type Queue = dyn BoundedPriorityQueueTrait<
+//!     SomeStruct,
+//!     MaxLength = MaximumLength
+//! >;
+//! // Implementation that we will instantiate.
+//! type Transient = PriorityQueueTransient<
+//!     SomeStruct,
+//!     <TestModule as Store>::Items,
+//!     MaximumLength,
+//! >;
+//! {
+//!     let mut queue: Box<Queue> = Box::new(Transient::new());
+//!     queue.push(SomeStruct { foo: 1, bar: 2 });
+//! } // `queue.commit()` will be called on `drop` here and syncs to storage
+//! ```
+//!
+//! Note: You might want to introduce a helper function that wraps the complex
+//! types and just returns the boxed trait object.
+
 use codec::{Codec, EncodeLike};
 use core::marker::PhantomData;
 use frame_support::{storage::StorageValue, traits::Get};
@@ -31,7 +64,7 @@ where
 }
 
 /// Transient backing data that is the backbone of the trait object.
-pub struct QueueTransient<Item, Storage, MaxLength>
+pub struct PriorityQueueTransient<Item, Storage, MaxLength>
 where
 	Item: Codec + EncodeLike + Ord + Clone,
 	Storage: StorageValue<Vec<Item>, Query = Vec<Item>>,
@@ -41,25 +74,25 @@ where
 	_phantom: PhantomData<(Storage, MaxLength)>,
 }
 
-impl<Item, Storage, MaxLength> QueueTransient<Item, Storage, MaxLength>
+impl<Item, Storage, MaxLength> PriorityQueueTransient<Item, Storage, MaxLength>
 where
 	Item: Codec + EncodeLike + Ord + Clone,
 	Storage: StorageValue<Vec<Item>, Query = Vec<Item>>,
 	MaxLength: Get<u64>,
 {
-	/// Create a new `QueueTransient` that backs the priority queue implementation.
+	/// Create a new `PriorityQueueTransient` that backs the priority queue implementation.
 	///
 	/// Initializes itself from storage with the `Storage` type.
-	pub fn new() -> QueueTransient<Item, Storage, MaxLength> {
+	pub fn new() -> PriorityQueueTransient<Item, Storage, MaxLength> {
 		let items = Storage::get();
-		QueueTransient {
+		PriorityQueueTransient {
 			items,
 			_phantom: PhantomData,
 		}
 	}
 }
 
-impl<Item, Storage, MaxLength> Drop for QueueTransient<Item, Storage, MaxLength>
+impl<Item, Storage, MaxLength> Drop for PriorityQueueTransient<Item, Storage, MaxLength>
 where
 	Item: Codec + EncodeLike + Ord + Clone,
 	Storage: StorageValue<Vec<Item>, Query = Vec<Item>>,
@@ -71,7 +104,7 @@ where
 	}
 }
 
-impl<Item, Storage, MaxLength> BoundedPriorityQueueTrait<Item> for QueueTransient<Item, Storage, MaxLength>
+impl<Item, Storage, MaxLength> BoundedPriorityQueueTrait<Item> for PriorityQueueTransient<Item, Storage, MaxLength>
 where
 	Item: Codec + EncodeLike + Ord + Clone,
 	Storage: StorageValue<Vec<Item>, Query = Vec<Item>>,
@@ -213,7 +246,7 @@ mod tests {
 	// Trait object that we will be interacting with.
 	type BoundedQueue = dyn BoundedPriorityQueueTrait<SomeStruct, MaxLength = MaxLength>;
 	// Implementation that we will instantiate.
-	type Transient = QueueTransient<SomeStruct, <TestModule as Store>::TestItems, MaxLength>;
+	type Transient = PriorityQueueTransient<SomeStruct, <TestModule as Store>::TestItems, MaxLength>;
 
 	#[test]
 	fn simple_push() {

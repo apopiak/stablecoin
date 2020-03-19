@@ -90,7 +90,7 @@ mod queue;
 mod ringbuffer;
 mod utils;
 
-use queue::{BoundedPriorityQueueTrait, QueueTransient};
+use queue::{BoundedPriorityQueueTrait, PriorityQueueTransient};
 use ringbuffer::{RingBufferTrait, RingBufferTransient};
 use utils::saturated_mul;
 
@@ -461,7 +461,7 @@ impl<T: Trait> Module<T> {
 	// bids
 
 	fn bids_transient() -> Box<dyn BoundedPriorityQueueTrait<Bid<T::AccountId>, MaxLength = T::MaximumBids>> {
-		Box::new(QueueTransient::<
+		Box::new(PriorityQueueTransient::<
 			Bid<T::AccountId>,
 			<Self as Store>::BondBids,
 			T::MaximumBids,
