@@ -88,6 +88,7 @@ use system::ensure_signed;
 
 mod ringbuffer;
 mod utils;
+mod queue;
 
 use ringbuffer::{RingBufferTrait, RingBufferTransient};
 use utils::saturated_mul;
