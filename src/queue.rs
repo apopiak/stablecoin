@@ -3,18 +3,34 @@ use core::marker::PhantomData;
 use frame_support::{storage::StorageValue, traits::Get};
 use core::cmp::Ord;
 
+/// Trait object presenting the priority queue interface.
 pub trait BoundedPriorityQueueTrait<Item>
 where
 	Item: Codec + EncodeLike + Ord + Clone,
 {
+	/// The maximum amount of items in the queue.
 	type MaxLength: Get<u64>;
 
+	/// Store all changes made in the underlying storage.
+	///
+	/// Data is not guaranteed to be consistent before this call.
+	/// 
+	/// Implementation note: Call in `drop` to increase ergonomics.
 	fn commit(&mut self);
+	/// Push an item into the queue (will be sorted according to `Ord`).
+	/// 
+	/// Will return the smallest (according to `Ord`) item if length increased
+	/// over `MaxLength` otherwise.
 	fn push(&mut self, i: Item) -> Option<Item>;
+	/// Pop the greates item from the queue.
+	///
+	/// Returns `None` if the queue is empty.
 	fn pop(&mut self) -> Option<Item>;
+	/// Return whether the queue is empty.
 	fn is_empty(&self) -> bool;
 }
 
+/// Transient backing data that is the backbone of the trait object.
 pub struct QueueTransient<Item, Storage, MaxLength>
 where
 	Item: Codec + EncodeLike + Ord + Clone,
@@ -31,6 +47,9 @@ where
 	Storage: StorageValue<Vec<Item>, Query = Vec<Item>>,
 	MaxLength: Get<u64>,
 {
+	/// Create a new `QueueTransient` that backs the priority queue implementation.
+	///
+	/// Initializes itself from storage with the `Storage` type.
 	pub fn new() -> QueueTransient<Item, Storage, MaxLength> {
 		let items = Storage::get();
 		QueueTransient {
@@ -60,10 +79,17 @@ where
 {
 	type MaxLength = MaxLength;
 
+	/// Commit the (potentially) changed backing `Vec` to storage.
 	fn commit(&mut self) {
 		Storage::put(self.items.clone());
 	}
 
+	/// Sort a new item into the queue according to its priority.
+	/// 
+	/// Will return the smallest (according to `Ord`) item if length increased
+	/// over `MaxLength` otherwise.
+	// TODO: This could be abused by an attacker kicking out other items with the same
+	//       value.
 	fn push(&mut self, item: Item) -> Option<Item> {
 		let index = self
 			.items
@@ -76,10 +102,14 @@ where
 		None
 	}
 
+	/// Pop the greates item from the queue.
+	///
+	/// Returns `None` if the queue is empty.
 	fn pop(&mut self) -> Option<Item> {
 		self.items.pop()
 	}
 
+	/// Return whether the queue is empty.
 	fn is_empty(&self) -> bool {
 		self.items.is_empty()
 	}
