@@ -1,4 +1,4 @@
-//! # Transient RingBuffer implementation
+//! # Transient RingBuffer Implementation
 //!
 //! This module provides a trait and implementation for a ringbuffer that
 //! abstracts over storage items and presents them as a FIFO queue.
@@ -8,11 +8,7 @@
 //! use ringbuffer::{RingBufferTrait, RingBufferTransient};
 //!
 //! // Trait object that we will be interacting with.
-//! type RingBuffer = dyn RingBufferTrait<
-//!     SomeStruct,
-//!     Bounds = <TestModule as Store>::TestRange,
-//!     Map = <TestModule as Store>::TestMap,
-//! >;
+//! type RingBuffer = dyn RingBufferTrait<SomeStruct>;
 //! // Implementation that we will instantiate.
 //! type Transient = RingBufferTransient<
 //!     SomeStruct,
