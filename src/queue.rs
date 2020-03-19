@@ -7,7 +7,7 @@ pub trait BoundedPriorityQueueTrait<Item>
 where
 	Item: Codec + EncodeLike + Ord + Clone,
 {
-	type MaxLength: Get<usize>;
+	type MaxLength: Get<u64>;
 
 	fn commit(&mut self);
 	fn push(&mut self, i: Item) -> Option<Item>;
@@ -19,7 +19,7 @@ pub struct QueueTransient<Item, Storage, MaxLength>
 where
 	Item: Codec + EncodeLike + Ord + Clone,
 	Storage: StorageValue<Vec<Item>, Query = Vec<Item>>,
-	MaxLength: Get<usize>,
+	MaxLength: Get<u64>,
 {
 	items: Vec<Item>,
 	_phantom: PhantomData<(Storage, MaxLength)>,
@@ -29,7 +29,7 @@ impl<Item, Storage, MaxLength> QueueTransient<Item, Storage, MaxLength>
 where
 	Item: Codec + EncodeLike + Ord + Clone,
 	Storage: StorageValue<Vec<Item>, Query = Vec<Item>>,
-	MaxLength: Get<usize>,
+	MaxLength: Get<u64>,
 {
 	pub fn new() -> QueueTransient<Item, Storage, MaxLength> {
 		let items = Storage::get();
@@ -44,7 +44,7 @@ impl<Item, Storage, MaxLength> Drop for QueueTransient<Item, Storage, MaxLength>
 where
 	Item: Codec + EncodeLike + Ord + Clone,
 	Storage: StorageValue<Vec<Item>, Query = Vec<Item>>,
-	MaxLength: Get<usize>,
+	MaxLength: Get<u64>,
 {
 	/// Commit on `drop`.
 	fn drop(&mut self) {
@@ -56,7 +56,7 @@ impl<Item, Storage, MaxLength> BoundedPriorityQueueTrait<Item> for QueueTransien
 where
 	Item: Codec + EncodeLike + Ord + Clone,
 	Storage: StorageValue<Vec<Item>, Query = Vec<Item>>,
-	MaxLength: Get<usize>,
+	MaxLength: Get<u64>,
 {
 	type MaxLength = MaxLength;
 
@@ -70,7 +70,7 @@ where
 			.binary_search_by(|it| it.cmp(&item))
 			.unwrap_or_else(|i| i);
 		self.items.insert(index, item);
-		if self.items.len() > MaxLength::get() {
+		if self.items.len() as u64 > MaxLength::get() {
 			return Some(self.items.remove(0));
 		}
 		None
@@ -177,7 +177,7 @@ mod tests {
 	}
 
 	parameter_types! {
-		pub const MaxLength: usize = 20;
+		pub const MaxLength: u64 = 20;
 	}
 
 	// Trait object that we will be interacting with.

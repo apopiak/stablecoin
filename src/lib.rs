@@ -86,10 +86,11 @@ use sp_runtime::{traits::CheckedMul, Fixed64, PerThing, Perbill};
 use sp_std::collections::vec_deque::VecDeque;
 use system::ensure_signed;
 
+mod queue;
 mod ringbuffer;
 mod utils;
-mod queue;
 
+use queue::{BoundedPriorityQueueTrait, QueueTransient};
 use ringbuffer::{RingBufferTrait, RingBufferTransient};
 use utils::saturated_mul;
 
@@ -167,7 +168,7 @@ impl<AccountId> PartialEq for Bid<AccountId> {
 		self.price == other.price
 	}
 }
-impl<AccountId> Eq for Bid<AccountId>{}
+impl<AccountId> Eq for Bid<AccountId> {}
 
 impl<AccountId> PartialOrd for Bid<AccountId> {
 	fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
@@ -459,35 +460,19 @@ impl<T: Trait> Module<T> {
 	// ------------------------------------------------------------
 	// bids
 
-	/// Add a bid to the queue.
-	fn add_bid(bid: Bid<T::AccountId>) {
-		let mut bids = Self::bond_bids();
-
-		Self::_add_bid_to(bid, &mut bids);
-
-		<BondBids<T>>::put(bids);
+	fn bids_transient() -> Box<dyn BoundedPriorityQueueTrait<Bid<T::AccountId>, MaxLength = T::MaximumBids>> {
+		Box::new(QueueTransient::<
+			Bid<T::AccountId>,
+			<Self as Store>::BondBids,
+			T::MaximumBids,
+		>::new())
 	}
 
-	/// Add a bid to the given queue, making sure to sort it from highest to lowest price.
-	///
-	/// Truncates the bids to `MaximumBids` to keep the queue bounded.
-	// TODO: Investigate use of a (more "proper") priority queue (binary heap?).
-	// 	     Would need to allow removing the smallest item to be of bounded size.
-	// TODO: be careful with malicious actor who would constantly bid an amount equal
-	//		 to the last bid in the queue and evict people on purpose.
-	fn _add_bid_to(bid: Bid<T::AccountId>, bids: &mut Vec<Bid<T::AccountId>>) {
-		let index: usize = bids
-			// sort the bids from lowest to highest, so we can pop the highest bid
-			.binary_search(&bid)
-			.unwrap_or_else(|i| i);
-		bids.insert(index, bid);
-		if bids.len() as u64 > T::MaximumBids::get() {
-			Self::refund_bid(&bids.remove(0));
-		}
-		debug_assert!(
-			bids.len() as u64 <= T::MaximumBids::get(),
-			"there should never be more than MaximumBids"
-		);
+	/// Add a bid to the queue.
+	fn add_bid(bid: Bid<T::AccountId>) {
+		Self::bids_transient()
+			.push(bid)
+			.map(|to_refund| Self::refund_bid(&to_refund));
 	}
 
 	/// Refund the coins payed for `bid` to the account that bid.
@@ -526,7 +511,7 @@ impl<T: Trait> Module<T> {
 			return Err(DispatchError::from(Error::<T>::CoinSupplyUnderflow));
 		}
 		// ↑ verify ↑
-		let mut bids = Self::bond_bids();
+		let mut bids = Self::bids_transient();
 		let mut remaining = amount;
 		let mut new_bonds = VecDeque::new();
 		// ↓ update ↓
@@ -545,7 +530,7 @@ impl<T: Trait> Module<T> {
 						new_bonds.push_back(Self::new_bond(bid.account.clone(), removed_quantity));
 						// re-add bid with reduced amount
 						if bid.quantity > 0 {
-							Self::_add_bid_to(bid, &mut bids);
+							bids.push(bid).map(|to_refund| Self::refund_bid(&to_refund));
 						}
 						remaining = 0;
 					}
@@ -581,7 +566,6 @@ impl<T: Trait> Module<T> {
 			bonds.push(bond);
 		}
 		<CoinSupply>::put(new_supply);
-		<BondBids<T>>::put(bids);
 		Self::deposit_event(RawEvent::ContractedSupply(burned));
 		Ok(())
 	}
@@ -603,11 +587,9 @@ impl<T: Trait> Module<T> {
 	}
 
 	/// Create a new transient storage adapter that manages the bonds.
-	/// 
+	///
 	/// Allows pushing and popping on a ringbuffer without managing the storage details.
-	fn bonds_transient() -> Box<
-		dyn RingBufferTrait<Bond<T::AccountId, T::BlockNumber>>,
-	> {
+	fn bonds_transient() -> Box<dyn RingBufferTrait<Bond<T::AccountId, T::BlockNumber>>> {
 		Box::new(RingBufferTransient::<
 			Bond<T::AccountId, T::BlockNumber>,
 			<Self as Store>::BondsRange,
