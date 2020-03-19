@@ -73,7 +73,7 @@
 use sp_std::prelude::*;
 
 use codec::{Decode, Encode};
-use core::cmp::{max, min};
+use core::cmp::{max, min, Ord, Ordering};
 use frame_support::{
 	debug::native,
 	decl_error, decl_event, decl_module, decl_storage,
@@ -154,12 +154,32 @@ pub struct Bond<AccountId, BlockNumber> {
 /// + `account` is the bidder.
 /// + `price` is a percentage of 1 coin.
 /// + `quantity` is the amount of coins gained on payout of the corresponding bond.
-#[derive(Encode, Decode, Default, Clone, PartialEq)]
+#[derive(Encode, Decode, Default, Clone)]
 #[cfg_attr(feature = "std", derive(Debug))]
 pub struct Bid<AccountId> {
 	account: AccountId,
 	price: Perbill,
 	quantity: Coins,
+}
+
+impl<AccountId> PartialEq for Bid<AccountId> {
+	fn eq(&self, other: &Self) -> bool {
+		self.price == other.price
+	}
+}
+impl<AccountId> Eq for Bid<AccountId>{}
+
+impl<AccountId> PartialOrd for Bid<AccountId> {
+	fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
+		Some(self.cmp(other))
+	}
+}
+
+/// Sort `Bid`s by price
+impl<AccountId> Ord for Bid<AccountId> {
+	fn cmp(&self, other: &Self) -> Ordering {
+		self.price.cmp(&other.price)
+	}
 }
 
 /// Error returned from `remove_coins` if there is an over- or underflow.
@@ -458,7 +478,7 @@ impl<T: Trait> Module<T> {
 	fn _add_bid_to(bid: Bid<T::AccountId>, bids: &mut Vec<Bid<T::AccountId>>) {
 		let index: usize = bids
 			// sort the bids from lowest to highest, so we can pop the highest bid
-			.binary_search_by(|&Bid { price, .. }| price.cmp(&bid.price))
+			.binary_search(&bid)
 			.unwrap_or_else(|i| i);
 		bids.insert(index, bid);
 		if bids.len() as u64 > T::MaximumBids::get() {

@@ -1,7 +1,7 @@
 use codec::{Codec, EncodeLike};
 use core::marker::PhantomData;
 use frame_support::{storage::StorageValue, traits::Get};
-use std::cmp::Ord;
+use core::cmp::Ord;
 
 pub trait BoundedPriorityQueueTrait<Item>
 where
@@ -13,7 +13,6 @@ where
 	fn push(&mut self, i: Item) -> Option<Item>;
 	fn pop(&mut self) -> Option<Item>;
 	fn is_empty(&self) -> bool;
-	
 }
 
 pub struct QueueTransient<Item, Storage, MaxLength>
