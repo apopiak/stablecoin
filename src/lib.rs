@@ -72,6 +72,7 @@
 
 use sp_std::prelude::*;
 
+use adapters::{BoundedPriorityQueueTrait, PriorityQueueTransient, RingBufferTrait, RingBufferTransient};
 use codec::{Decode, Encode};
 use core::cmp::{max, min, Ord, Ordering};
 use frame_support::{
@@ -86,12 +87,7 @@ use sp_runtime::{traits::CheckedMul, Fixed64, PerThing, Perbill};
 use sp_std::collections::vec_deque::VecDeque;
 use system::ensure_signed;
 
-mod queue;
-mod ringbuffer;
 mod utils;
-
-use queue::{BoundedPriorityQueueTrait, PriorityQueueTransient};
-use ringbuffer::{RingBufferTrait, RingBufferTransient};
 use utils::saturated_mul;
 
 /// Expected price oracle interface. `fetch_price` must return the amount of coins exchanged for the tracked value.

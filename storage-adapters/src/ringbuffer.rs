@@ -29,7 +29,6 @@ use codec::{Codec, EncodeLike};
 use core::marker::PhantomData;
 use frame_support::storage::{StorageMap, StorageValue};
 
-
 /// Trait object presenting the ringbuffer interface.
 pub trait RingBufferTrait<Item>
 where

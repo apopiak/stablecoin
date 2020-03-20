@@ -1,42 +1,33 @@
 [package]
-name = "pallet-stablecoin"
-version = "0.0.4"
+name = "storage-adapters"
+version = "0.0.1"
 authors = ["apopiak"]
 edition = "2018"
 
 [features]
 default = ['std']
 std = [
-    'serde',
     'codec/std',
     'frame-support/std',
     'sp-runtime/std',
     'sp-io/std',
     'sp-std/std',
     'system/std',
-    'adapters/std',
 ]
 
 [dependencies]
-# local deps
-adapters = { default-features = false, package = 'storage-adapters', version = '0.0.*', path = './storage-adapters' }
-# regular deps
 codec = { default-features = false, features = ['derive'], package = 'parity-scale-codec', version = '1.2.0' }
-num-rational = { default-features = false, version = "0.2" }
-# substrate deps
 frame-support = { default-features = false, version = '2.0.0-alpha.3' }
+
+# dev-dependencies that have to be dependencies because of this cargo issue:
+# https://github.com/rust-lang/cargo/issues/6915
 sp-io = { default-features = false, version = '2.0.0-alpha.3' }
 sp-runtime = { default-features = false, version = '2.0.0-alpha.3' }
 sp-std = { default-features = false, version = '2.0.0-alpha.3' }
 system = { default-features = false, package = 'frame-system', version = '2.0.0-alpha.3' }
-# optional deps
-serde = { features = ['derive'], optional = true, version = '1.0.101' }
 
 [dev-dependencies]
 itertools = "0.8.2"
 quickcheck = "0.9.2"
 more-asserts = "0.2.1"
-rand = "0.7.3"
-log = "0.4.8"
-# substrate deps
 sp-core = { default-features = false, version = '2.0.0-alpha.3' }

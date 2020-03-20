@@ -5,7 +5,7 @@
 //!
 //! Usage Example:
 //! ```rust,ignore
-//! use queue::{BoundedPriorityQueueTrait, PriorityQueueTransient};
+//! use priority_queue::{BoundedPriorityQueueTrait, PriorityQueueTransient};
 //! 
 //! parameter_types! {
 //!     pub const MaximumLength: u64 = 42;
