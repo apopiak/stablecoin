@@ -83,7 +83,11 @@ use frame_support::{
 	traits::Get,
 };
 use num_rational::Ratio;
-use sp_runtime::{traits::CheckedMul, Fixed64, PerThing, Perbill};
+use orml_traits::BasicCurrency;
+use sp_runtime::{
+	traits::{CheckedMul, Zero},
+	Fixed64, PerThing, Perbill,
+};
 use sp_std::collections::vec_deque::VecDeque;
 use system::ensure_signed;
 
@@ -353,25 +357,11 @@ decl_module! {
 		fn deposit_event() = default;
 
 		/// Transfer `amount` coins from the sender to the account `to`.
-		pub fn transfer(origin, to: T::AccountId, amount: u64) -> DispatchResult {
+		pub fn send_coins(origin, to: T::AccountId, amount: u64) -> DispatchResult {
 			let sender = ensure_signed(origin)?;
-
-			let sender_balance = Self::get_balance(&sender);
-			let updated_from_balance = sender_balance.checked_sub(amount).ok_or(Error::<T>::InsufficientBalance)?;
-			let receiver_balance = Self::get_balance(&to);
-			let updated_to_balance = receiver_balance.checked_add(amount).ok_or(Error::<T>::BalanceOverflow)?;
-
-			// ↑ verify ↑
-			// ↓ update ↓
-
-			// reduce sender's balance
-			<Balance<T>>::insert(&sender, updated_from_balance);
-			// increase receiver's balance
-			<Balance<T>>::insert(&to, updated_to_balance);
-
+			let res = Self::transfer_from_to(&sender, &to, amount);
 			Self::deposit_event(RawEvent::Transfer(sender, to, amount));
-
-			Ok(())
+			res
 		}
 
 		/// Bid for `quantity` coins at a `price`.
@@ -432,9 +422,89 @@ decl_module! {
 	}
 }
 
+impl<T: Trait> BasicCurrency<T::AccountId> for Module<T> {
+	type Balance = Coins;
+
+	fn total_issuance() -> Self::Balance {
+		Self::coin_supply()
+	}
+
+	// TODO: think through balance organization
+	fn total_balance(who: &T::AccountId) -> Self::Balance {
+		Self::get_balance(who)
+	}
+
+	fn free_balance(who: &T::AccountId) -> Self::Balance {
+		Self::get_balance(who)
+	}
+
+	fn ensure_can_withdraw(_who: &T::AccountId, amount: Self::Balance) -> DispatchResult {
+		if amount.is_zero() {
+			return Ok(());
+		}
+		Err(DispatchError::Other("cannot change issuance for stablecoins"))
+	}
+
+	fn transfer(from: &T::AccountId, to: &T::AccountId, amount: Self::Balance) -> DispatchResult {
+		Self::transfer_from_to(from, to, amount)
+	}
+
+	/// Add `amount` to the balance of `who` and increase total issuance.
+	fn deposit(_who: &T::AccountId, _amount: Self::Balance) -> DispatchResult {
+		Err(DispatchError::Other("cannot change issuance for stablecoins"))
+	}
+
+	/// Remove `amount` from the balance of `who` and reduce total issuance.
+	fn withdraw(_who: &T::AccountId, _amount: Self::Balance) -> DispatchResult {
+		Err(DispatchError::Other("cannot change issuance for stablecoins"))
+	}
+
+	// slashing
+	fn can_slash(who: &T::AccountId, value: Self::Balance) -> bool {
+		if value.is_zero() {
+			return true;
+		}
+		Self::get_balance(who) >= value
+	}
+
+	fn slash(who: &T::AccountId, amount: Self::Balance) -> Self::Balance {
+		let mut remaining: Coins = 0;
+		<Balance<T>>::mutate(who, |b: &mut u64| {
+			if *b < amount {
+				remaining = amount - *b;
+				*b = 0;
+			} else {
+				*b = b.saturating_sub(amount);
+			}
+		});
+		remaining
+	}
+}
+
 impl<T: Trait> Module<T> {
 	// ------------------------------------------------------------
 	// balances
+
+	fn transfer_from_to(from: &T::AccountId, to: &T::AccountId, amount: Coins) -> DispatchResult {
+		let from_balance = Self::get_balance(from);
+		let updated_from_balance = from_balance
+			.checked_sub(amount)
+			.ok_or(Error::<T>::InsufficientBalance)?;
+		let receiver_balance = Self::get_balance(&to);
+		let updated_to_balance = receiver_balance
+			.checked_add(amount)
+			.ok_or(Error::<T>::BalanceOverflow)?;
+
+		// ↑ verify ↑
+		// ↓ update ↓
+
+		// reduce from's balance
+		<Balance<T>>::insert(&from, updated_from_balance);
+		// increase receiver's balance
+		<Balance<T>>::insert(&to, updated_to_balance);
+
+		Ok(())
+	}
 
 	/// Add `amount` coins to the balance for `account`.
 	fn add_balance(account: &T::AccountId, amount: Coins) {
@@ -449,8 +519,7 @@ impl<T: Trait> Module<T> {
 		<Balance<T>>::try_mutate(&account, |b: &mut u64| -> DispatchResult {
 			*b = b.checked_sub(amount).ok_or(Error::<T>::InsufficientBalance)?;
 			Ok(())
-		})?;
-		Ok(())
+		})
 	}
 
 	// ------------------------------------------------------------
@@ -912,6 +981,35 @@ mod tests {
 			);
 			let share_supply: u64 = shares.iter().map(|(_a, s)| s).sum();
 			assert_eq!(share_supply, 10);
+		});
+	}
+
+	// ------------------------------------------------------------
+	// balances
+	#[test]
+	fn transfer_test() {
+		new_test_ext().execute_with(|| {
+			let first_acc = 1;
+			let second_acc = 2;
+			let amount = BASE_UNIT;
+			let from_balance_before = Stablecoin::get_balance(first_acc);
+			let to_balance_before = Stablecoin::get_balance(second_acc);
+			assert_ok!(Stablecoin::transfer_from_to(&first_acc, &second_acc, amount));
+			assert_eq!(Stablecoin::get_balance(first_acc), from_balance_before - amount);
+			assert_eq!(Stablecoin::get_balance(second_acc), to_balance_before + amount);
+		});
+	}
+
+	// ------------------------------------------------------------
+	// currency trait
+	#[test]
+	fn slash_test() {
+		new_test_ext().execute_with(|| {
+			let acc = 1;
+			let amount = BASE_UNIT;
+			let balance_before = Stablecoin::get_balance(acc);
+			assert_eq!(Stablecoin::slash(&acc, amount), 0);
+			assert_eq!(Stablecoin::get_balance(acc), balance_before - amount);
 		});
 	}
 
