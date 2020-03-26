@@ -67,8 +67,8 @@
 //! Stablecoin: pallet_stablecoin::{Module, Call, Storage, Event<T>},
 //! ```
 //!
-
 #![cfg_attr(not(feature = "std"), no_std)]
+#![warn(missing_docs)]
 
 use sp_std::prelude::*;
 
@@ -94,7 +94,7 @@ use system::ensure_signed;
 mod utils;
 use utils::saturated_mul;
 
-/// Expected price oracle interface. `fetch_price` must return the amount of coins exchanged for the tracked value.
+/// Expected price oracle interface. `fetch_price` must return the amount of Coins exchanged for the tracked value.
 pub trait FetchPrice<Balance> {
 	/// Fetch the current price.
 	fn fetch_price() -> Balance;
@@ -102,6 +102,7 @@ pub trait FetchPrice<Balance> {
 
 /// The type used to represent the account balance for the stablecoin.
 pub type Coins = u64;
+/// The type used to index into the map storing the bonds queue.
 pub type BondIndex = u16;
 
 /// The pallet's configuration trait.
@@ -109,7 +110,7 @@ pub trait Trait: system::Trait {
 	/// The overarching event type.
 	type Event: From<Event<Self>> + Into<<Self as system::Trait>::Event>;
 
-	/// The amount of coins necessary to buy the tracked value. (e.g., 1_100 for 1$)
+	/// The amount of Coins necessary to buy the tracked value. (e.g., 1_100 for 1$)
 	type CoinPrice: FetchPrice<Coins>;
 	/// The expiration time of a bond.
 	///
@@ -136,7 +137,7 @@ pub trait Trait: system::Trait {
 	type MinimumSupply: Get<Coins>;
 }
 
-/// A bond representing (potential) future payout of coins.
+/// A bond representing (potential) future payout of Coins.
 ///
 /// Expires at block `expiration` so it will be discarded if payed out after that block.
 ///
@@ -154,7 +155,7 @@ pub struct Bond<AccountId, BlockNumber> {
 ///
 /// + `account` is the bidder.
 /// + `price` is a percentage of 1 coin.
-/// + `quantity` is the amount of coins gained on payout of the corresponding bond.
+/// + `quantity` is the amount of Coins gained on payout of the corresponding bond.
 #[derive(Encode, Decode, Default, Clone)]
 #[cfg_attr(feature = "std", derive(Debug))]
 pub struct Bid<AccountId> {
@@ -163,6 +164,8 @@ pub struct Bid<AccountId> {
 	quantity: Coins,
 }
 
+// Implement `Ord` for `Bid` to get the wanted sorting in the priority queue.
+// TODO: Could this create issues in testing? How to address?
 impl<AccountId> PartialEq for Bid<AccountId> {
 	fn eq(&self, other: &Self) -> bool {
 		self.price == other.price
@@ -175,8 +178,7 @@ impl<AccountId> PartialOrd for Bid<AccountId> {
 		Some(self.cmp(other))
 	}
 }
-
-/// Sort `Bid`s by price
+/// Sort `Bid`s by price.
 impl<AccountId> Ord for Bid<AccountId> {
 	fn cmp(&self, other: &Self) -> Ordering {
 		self.price.cmp(&other.price)
@@ -185,7 +187,9 @@ impl<AccountId> Ord for Bid<AccountId> {
 
 /// Error returned from `remove_coins` if there is an over- or underflow.
 pub enum BidError {
+	/// `remove_coins` overflowed.
 	Overflow,
+	/// `remove_coins` underflowed.
 	Underflow,
 }
 
@@ -199,13 +203,13 @@ impl<AccountId> Bid<AccountId> {
 		}
 	}
 
-	/// Return the amount of coins to be payed for this bid.
+	/// Return the amount of Coins to be payed for this bid.
 	fn payment(&self) -> Coins {
 		// This naive multiplication is fine because Perbill has an implementation tuned for balance types.
 		self.price * self.quantity
 	}
 
-	/// Remove `coins` amount of coins from the bid, mirroring the changes in quantity
+	/// Remove `coins` amount of Coins from the bid, mirroring the changes in quantity
 	/// according to the price attached to the bid.
 	fn remove_coins(&mut self, coins: Coins) -> Result<Coins, BidError> {
 		// Inverse price is needed because `self.price` converts from amount of bond payout coins to payment coins,
@@ -272,7 +276,9 @@ decl_error! {
 		BalanceOverflow,
 		/// Something went very wrong and the price of the currency is zero.
 		ZeroPrice,
+		/// An arithmetic operation caused an overflow.
 		GenericOverflow,
+		/// An arithmetic operation caused an underflow.
 		GenericUnderflow,
 		/// The bidder tried to pay more than 100% for a bond.
 		BondPriceOver100Percent,
@@ -305,7 +311,7 @@ decl_storage! {
 		/// The balance of stablecoin associated with each account.
 		Balance get(fn get_balance): map hasher(blake2_128_concat) T::AccountId => Coins;
 
-		/// The total amount of coins in circulation.
+		/// The total amount of Coins in circulation.
 		CoinSupply get(fn coin_supply): Coins = 0;
 
 		/// The available bonds for contracting supply.
@@ -356,7 +362,7 @@ decl_module! {
 
 		fn deposit_event() = default;
 
-		/// Transfer `amount` coins from the sender to the account `to`.
+		/// Transfer `amount` Coins from the sender to the account `to`.
 		pub fn send_coins(origin, to: T::AccountId, amount: u64) -> DispatchResult {
 			let sender = ensure_signed(origin)?;
 			let res = Self::transfer_from_to(&sender, &to, amount);
@@ -364,14 +370,14 @@ decl_module! {
 			res
 		}
 
-		/// Bid for `quantity` coins at a `price`.
+		/// Bid for `quantity` Coins at a `price`.
 		///
 		/// + `price` is a fraction of the desired payout quantity (e.g., 80%).
 		/// + Expects a `quantity` of a least `BaseUnit`.
 		///
 		/// Example: `bid_for_bond(origin, Perbill::from_percent(80), 5 * BaseUnit)` will bid
-		/// for a bond with a payout of `5 * BaseUnit` coins for a price of
-		/// `0.8 * 5 * BaseUnit = 4 * BaseUnit` coins.
+		/// for a bond with a payout of `5 * BaseUnit` Coins for a price of
+		/// `0.8 * 5 * BaseUnit = 4 * BaseUnit` Coins.
 		pub fn bid_for_bond(origin, price: Perbill, quantity: Coins) -> DispatchResult {
 			let who = ensure_signed(origin)?;
 
@@ -390,7 +396,7 @@ decl_module! {
 			Ok(())
 		}
 
-		/// Cancel all bids at or below `price` of the sender and refund the coins.
+		/// Cancel all bids at or below `price` of the sender and refund the Coins.
 		pub fn cancel_bids_at_or_below(origin, price: Perbill) -> DispatchResult {
 			let who = ensure_signed(origin)?;
 			// ↑ verify ↑
@@ -401,7 +407,7 @@ decl_module! {
 			Ok(())
 		}
 
-		/// Cancel all bids belonging to the sender and refund the coins.
+		/// Cancel all bids belonging to the sender and refund the Coins.
 		pub fn cancel_all_bids(origin) -> DispatchResult {
 			let who = ensure_signed(origin)?;
 			// ↑ verify ↑
@@ -412,7 +418,7 @@ decl_module! {
 			Ok(())
 		}
 
-		/// Adjust the amount of coins according to the price.
+		/// Adjust the amount of Coins according to the price.
 		fn on_initialize(n: T::BlockNumber) {
 			let price = T::CoinPrice::fetch_price();
 			Self::on_block_with_price(n, price).unwrap_or_else(|e| {
@@ -422,22 +428,29 @@ decl_module! {
 	}
 }
 
+// Implement the BasicCurrency to allow other pallets to interact programmatically
+// with the Stablecoin.
 impl<T: Trait> BasicCurrency<T::AccountId> for Module<T> {
 	type Balance = Coins;
 
+	/// Return the amount of Coins in circulation.
 	fn total_issuance() -> Self::Balance {
 		Self::coin_supply()
 	}
 
-	// TODO: think through balance organization
+	/// Return the balance of the given account.
 	fn total_balance(who: &T::AccountId) -> Self::Balance {
 		Self::get_balance(who)
 	}
 
+	/// Return the free balance of the given account.
+	/// 
+	/// Equal to `total_balance` for this stablecoin.
 	fn free_balance(who: &T::AccountId) -> Self::Balance {
 		Self::get_balance(who)
 	}
 
+	/// Cannot withdraw from stablecoin accounts. Returns `Ok(())` if `amount` is 0, otherwise returns an error.
 	fn ensure_can_withdraw(_who: &T::AccountId, amount: Self::Balance) -> DispatchResult {
 		if amount.is_zero() {
 			return Ok(());
@@ -445,6 +458,7 @@ impl<T: Trait> BasicCurrency<T::AccountId> for Module<T> {
 		Err(DispatchError::Other("cannot change issuance for stablecoins"))
 	}
 
+	/// Transfer `amount` from one account to another.
 	fn transfer(from: &T::AccountId, to: &T::AccountId, amount: Self::Balance) -> DispatchResult {
 		Self::transfer_from_to(from, to, amount)
 	}
@@ -459,7 +473,7 @@ impl<T: Trait> BasicCurrency<T::AccountId> for Module<T> {
 		Err(DispatchError::Other("cannot change issuance for stablecoins"))
 	}
 
-	// slashing
+	/// Test whether the given account can be slashed with `value`.
 	fn can_slash(who: &T::AccountId, value: Self::Balance) -> bool {
 		if value.is_zero() {
 			return true;
@@ -467,6 +481,10 @@ impl<T: Trait> BasicCurrency<T::AccountId> for Module<T> {
 		Self::get_balance(who) >= value
 	}
 
+	/// Slash account `who` by `amount` returning the actual amount slashed.
+	/// 
+	/// If the account does not have `amount` Coins it will be slashed to 0
+	/// and that amount returned.
 	fn slash(who: &T::AccountId, amount: Self::Balance) -> Self::Balance {
 		let mut remaining: Coins = 0;
 		<Balance<T>>::mutate(who, |b: &mut u64| {
@@ -485,6 +503,7 @@ impl<T: Trait> Module<T> {
 	// ------------------------------------------------------------
 	// balances
 
+	/// Transfer `amount` of Coins from one account to another.
 	fn transfer_from_to(from: &T::AccountId, to: &T::AccountId, amount: Coins) -> DispatchResult {
 		let from_balance = Self::get_balance(from);
 		let updated_from_balance = from_balance
@@ -506,7 +525,7 @@ impl<T: Trait> Module<T> {
 		Ok(())
 	}
 
-	/// Add `amount` coins to the balance for `account`.
+	/// Add `amount` Coins to the balance for `account`.
 	fn add_balance(account: &T::AccountId, amount: Coins) {
 		<Balance<T>>::mutate(account, |b: &mut u64| {
 			*b = b.saturating_add(amount);
@@ -514,7 +533,7 @@ impl<T: Trait> Module<T> {
 		});
 	}
 
-	/// Remove `amount` coins from the balance of `account`.
+	/// Remove `amount` Coins from the balance of `account`.
 	fn remove_balance(account: &T::AccountId, amount: Coins) -> DispatchResult {
 		<Balance<T>>::try_mutate(&account, |b: &mut u64| -> DispatchResult {
 			*b = b.checked_sub(amount).ok_or(Error::<T>::InsufficientBalance)?;
@@ -525,6 +544,7 @@ impl<T: Trait> Module<T> {
 	// ------------------------------------------------------------
 	// bids
 
+	/// Construct a transient storage adapter for the bids priority queue.
 	fn bids_transient() -> Box<dyn BoundedPriorityQueueTrait<Bid<T::AccountId>, MaxLength = T::MaximumBids>> {
 		Box::new(PriorityQueueTransient::<
 			Bid<T::AccountId>,
@@ -540,7 +560,7 @@ impl<T: Trait> Module<T> {
 			.map(|to_refund| Self::refund_bid(&to_refund));
 	}
 
-	/// Refund the coins payed for `bid` to the account that bid.
+	/// Refund the Coins payed for `bid` to the account that bid.
 	fn refund_bid(bid: &Bid<T::AccountId>) {
 		Self::add_balance(&bid.account, bid.payment());
 		Self::deposit_event(RawEvent::RefundedBid(bid.account.clone(), bid.payment()));
@@ -725,8 +745,8 @@ impl<T: Trait> Module<T> {
 		Ok(())
 	}
 
-	// Will hand out coins to shareholders according to their number of shares.
-	// Will hand out more coins to shareholders at the beginning of the list
+	// Will hand out Coins to shareholders according to their number of shares.
+	// Will hand out more Coins to shareholders at the beginning of the list
 	// if the handout cannot be equal.
 	fn hand_out_coins(shares: &[(T::AccountId, u64)], amount: Coins, coin_supply: Coins) -> DispatchResult {
 		// Checking whether the supply will overflow.
