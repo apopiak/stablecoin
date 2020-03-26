@@ -425,19 +425,24 @@ decl_module! {
 impl<T: Trait> BasicCurrency<T::AccountId> for Module<T> {
 	type Balance = Coins;
 
+	/// Return the amount of coins in circulation.
 	fn total_issuance() -> Self::Balance {
 		Self::coin_supply()
 	}
 
-	// TODO: think through balance organization
+	/// Return the balance of the given account.
 	fn total_balance(who: &T::AccountId) -> Self::Balance {
 		Self::get_balance(who)
 	}
 
+	/// Return the free balance of the given account.
+	/// 
+	/// Equal to `total_balance` for this stablecoin.
 	fn free_balance(who: &T::AccountId) -> Self::Balance {
 		Self::get_balance(who)
 	}
 
+	/// Cannot withdraw from stablecoin accounts. Returns `Ok(())` if `amount` is 0, otherwise returns an error.
 	fn ensure_can_withdraw(_who: &T::AccountId, amount: Self::Balance) -> DispatchResult {
 		if amount.is_zero() {
 			return Ok(());
@@ -445,6 +450,7 @@ impl<T: Trait> BasicCurrency<T::AccountId> for Module<T> {
 		Err(DispatchError::Other("cannot change issuance for stablecoins"))
 	}
 
+	/// Transfer `amount` from one account to another.
 	fn transfer(from: &T::AccountId, to: &T::AccountId, amount: Self::Balance) -> DispatchResult {
 		Self::transfer_from_to(from, to, amount)
 	}
@@ -459,7 +465,7 @@ impl<T: Trait> BasicCurrency<T::AccountId> for Module<T> {
 		Err(DispatchError::Other("cannot change issuance for stablecoins"))
 	}
 
-	// slashing
+	/// Test whether the given account can be slashed with `value`.
 	fn can_slash(who: &T::AccountId, value: Self::Balance) -> bool {
 		if value.is_zero() {
 			return true;
@@ -467,6 +473,10 @@ impl<T: Trait> BasicCurrency<T::AccountId> for Module<T> {
 		Self::get_balance(who) >= value
 	}
 
+	/// Slash account `who` by `amount` returning the actual amount slashed.
+	/// 
+	/// If the account does not have `amount` Coins it will be slashed to 0
+	/// and that amount returned.
 	fn slash(who: &T::AccountId, amount: Self::Balance) -> Self::Balance {
 		let mut remaining: Coins = 0;
 		<Balance<T>>::mutate(who, |b: &mut u64| {
