@@ -1,26 +1,17 @@
-# Stablecoin example pallet
+## Stablecoin example pallet
 
-This is a substrate pallet showcasing a sample implementation of a non-collateralized stablecoin based on the [Basis Whitepaper](https://www.basis.io/basis_whitepaper_en.pdf).
+This is a substrate pallet showcasing a sample implementation of a non-collateralized
+stablecoin based on the [Basis Whitepaper](https://www.basis.io/basis_whitepaper_en.pdf).
 
 **Note: Example project for illustration, NOT audited and NOT production ready.**
 
-## Purpose
-
-This pallet is a sample showing how to implement an algorithmic (non-collateralized) stablecoin.
-
-## Dependencies
-
-### Traits
-
-This pallet does not depend on any externally defined traits. It will probably be moved to an external definition of the `FetchPrice` trait soon.
-
-### Pallets
+### Dependencies
 
 This pallet depends on an external implementation of its `FetchPrice` trait - for example by an offchain worker - to act as a price oracle.
 
-## Installation
+### Installation
 
-### Runtime `Cargo.toml`
+#### Runtime `Cargo.toml`
 
 To add this pallet to your runtime, simply include the following in your runtime's `Cargo.toml` file:
 
@@ -39,7 +30,7 @@ std = [
 ]
 ```
 
-### Runtime `lib.rs`
+#### Runtime `lib.rs`
 
 Here is an example imlementation of its trait:
 
@@ -49,6 +40,7 @@ use pallet_stablecoin::Coins;
 parameter_types! {
     pub const ExpirationPeriod: BlockNumber = 5 * 365 * DAYS; // 5 years = 5 * 365 * DAYS
     pub const MaximumBids: usize = 1_000;
+    pub const MinimumBondPrice: Perbill = Perbill::from_percent(10);
     pub const AdjustmentFrequency: BlockNumber = 1 * MINUTES; // 1 minute = 60000 / MILLISECS_PER_BLOCK
     pub const BaseUnit: Coins = 1_000_000;
     pub const InitialSupply: Coins = 1000 * BaseUnit::get();
@@ -57,10 +49,11 @@ parameter_types! {
 
 impl pallet_stablecoin::Trait for Runtime {
     type Event = Event;
-    
+
     type CoinPrice = some_price_oracle::Module<Runtime>;
     type ExpirationPeriod = ExpirationPeriod;
     type MaximumBids = MaximumBids;
+    type MinimumBondPrice = MinimumBondPrice;
     type AdjustmentFrequency = AdjustmentFrequency;
     type BaseUnit = BaseUnit;
     type InitialSupply = InitialSupply;
@@ -74,9 +67,11 @@ and include it in your `construct_runtime!` macro:
 Stablecoin: pallet_stablecoin::{Module, Call, Storage, Event<T>},
 ```
 
-### Genesis Configuration
+#### GenesisConfig `chain_spec.rs`
 
-Runtimes using the pallet need to add the `StablecoinConfig` to their genesis config like in the following example:
+Runtimes using the pallet need to add the `StablecoinConfig` to their genesis config.
+The config expects a `Vec(AccountId, u64)` to initialize the shareholders.
+See the following snippet for an example:
 
 ```rust
 use node_template_runtime::{ // ... other imports
@@ -93,7 +88,7 @@ use node_template_runtime::{ // ... other imports
     }
 ```
 
-The config expects a `Vec(AccountId, u64)`. With this config the endowed accounts will be the shareholders of the stablecoin.
+With this config the endowed accounts will be the shareholders of the stablecoin.
 
 ## Implementation
 
