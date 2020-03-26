@@ -1,20 +1,20 @@
-# pallet-stablecoin
-Current version: 0.0.6
+`pallet-stablecoin = '0.0.6'`
+> Note: Not published to crates.io
 
-## Stablecoin example pallet
+# Stablecoin example pallet
 
 This is a substrate pallet showcasing a sample implementation of a non-collateralized
 stablecoin based on the [Basis Whitepaper](https://www.basis.io/basis_whitepaper_en.pdf).
 
 **Note: Example project for illustration, NOT audited and NOT production ready.**
 
-### Dependencies
+## Dependencies
 
 This pallet depends on an external implementation of its `FetchPrice` trait - for example by an offchain worker - to act as a price oracle.
 
-### Installation
+## Installation
 
-#### Runtime `Cargo.toml`
+### Runtime `Cargo.toml`
 
 To add this pallet to your runtime, simply include the following in your runtime's `Cargo.toml` file:
 
@@ -33,7 +33,7 @@ std = [
 ]
 ```
 
-#### Runtime `lib.rs`
+### Runtime `lib.rs`
 
 Here is an example imlementation of its trait:
 
@@ -70,7 +70,7 @@ and include it in your `construct_runtime!` macro:
 Stablecoin: pallet_stablecoin::{Module, Call, Storage, Event<T>},
 ```
 
-#### GenesisConfig `chain_spec.rs`
+### GenesisConfig `chain_spec.rs`
 
 Runtimes using the pallet need to add the `StablecoinConfig` to their genesis config.
 The config expects a `Vec(AccountId, u64)` to initialize the shareholders.
@@ -93,7 +93,7 @@ use node_template_runtime::{ // ... other imports
 
 With this config the endowed accounts will be the shareholders of the stablecoin.
 
-### Implementation
+## Implementation
 
 The implementation follows the [Basis Whitepaper](https://www.basis.io/basis_whitepaper_en.pdf). (It also takes some inspiration from [this unfinished Solidity implementation](https://github.com/alisyakainth/stablecoin).)
 
@@ -105,7 +105,7 @@ The `ExpirationPeriod` is configurable and measured in blocks (type `BlockNumber
 
 The continuous bidding auction for bonds is implemented as a bounded priority queue to reduce storage costs. The paper does not specify whether it should or should not be bounded.
 
-### Reference Docs
+## Reference Docs
 
 You can view the reference docs for this pallet by running:
 

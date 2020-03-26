@@ -1,4 +1,4 @@
-# {{crate}}
-Current version: {{version}}
+`{{crate}} = '{{version}}'`
+> note: unpublished
 
 {{readme}}

@@ -1,7 +1,7 @@
-# storage-adapters
-Current version: 0.0.1
+`storage-adapters = '0.0.1'`
+> note: unpublished
 
-## Transient Storage Adapters
+# Transient Storage Adapters
 
 A collection of adapters on top of the substrate storage API.
 
