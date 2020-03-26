@@ -1,6 +1,9 @@
+# {{crate}}
+Current version: {{version}}
+
 {{readme}}
 
-## Implementation
+### Implementation
 
 The implementation follows the [Basis Whitepaper](https://www.basis.io/basis_whitepaper_en.pdf). (It also takes some inspiration from [this unfinished Solidity implementation](https://github.com/alisyakainth/stablecoin).)
 
@@ -12,7 +15,7 @@ The `ExpirationPeriod` is configurable and measured in blocks (type `BlockNumber
 
 The continuous bidding auction for bonds is implemented as a bounded priority queue to reduce storage costs. The paper does not specify whether it should or should not be bounded.
 
-## Reference Docs
+### Reference Docs
 
 You can view the reference docs for this pallet by running:
 

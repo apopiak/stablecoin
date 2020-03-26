@@ -1,3 +1,6 @@
+# pallet-stablecoin
+Current version: 0.0.6
+
 ## Stablecoin example pallet
 
 This is a substrate pallet showcasing a sample implementation of a non-collateralized
@@ -90,7 +93,7 @@ use node_template_runtime::{ // ... other imports
 
 With this config the endowed accounts will be the shareholders of the stablecoin.
 
-## Implementation
+### Implementation
 
 The implementation follows the [Basis Whitepaper](https://www.basis.io/basis_whitepaper_en.pdf). (It also takes some inspiration from [this unfinished Solidity implementation](https://github.com/alisyakainth/stablecoin).)
 
@@ -102,7 +105,7 @@ The `ExpirationPeriod` is configurable and measured in blocks (type `BlockNumber
 
 The continuous bidding auction for bonds is implemented as a bounded priority queue to reduce storage costs. The paper does not specify whether it should or should not be bounded.
 
-## Reference Docs
+### Reference Docs
 
 You can view the reference docs for this pallet by running:
 

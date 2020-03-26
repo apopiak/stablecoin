@@ -1,5 +1,4 @@
 # {{crate}}
+Current version: {{version}}
 
 {{readme}}
-
-Current version: {{version}}
