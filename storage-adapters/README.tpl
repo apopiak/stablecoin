@@ -1,4 +1,4 @@
 `{{crate}} = '{{version}}'`
-> note: unpublished
+> Note: Not published to crates.io
 
 {{readme}}
