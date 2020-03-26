@@ -1,4 +1,4 @@
-//! Transient Storage Adapters
+//! # Transient Storage Adapters
 //!
 //! A collection of adapters on top of the substrate storage API.
 //!
