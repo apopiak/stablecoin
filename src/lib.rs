@@ -67,8 +67,8 @@
 //! Stablecoin: pallet_stablecoin::{Module, Call, Storage, Event<T>},
 //! ```
 //!
-
 #![cfg_attr(not(feature = "std"), no_std)]
+#![warn(missing_docs)]
 
 use sp_std::prelude::*;
 
@@ -102,6 +102,7 @@ pub trait FetchPrice<Balance> {
 
 /// The type used to represent the account balance for the stablecoin.
 pub type Coins = u64;
+/// The type used to index into the map storing the bonds queue.
 pub type BondIndex = u16;
 
 /// The pallet's configuration trait.
@@ -163,6 +164,8 @@ pub struct Bid<AccountId> {
 	quantity: Coins,
 }
 
+// Implement `Ord` for `Bid` to get the wanted sorting in the priority queue.
+// TODO: Could this create issues in testing? How to address?
 impl<AccountId> PartialEq for Bid<AccountId> {
 	fn eq(&self, other: &Self) -> bool {
 		self.price == other.price
@@ -175,8 +178,7 @@ impl<AccountId> PartialOrd for Bid<AccountId> {
 		Some(self.cmp(other))
 	}
 }
-
-/// Sort `Bid`s by price
+/// Sort `Bid`s by price.
 impl<AccountId> Ord for Bid<AccountId> {
 	fn cmp(&self, other: &Self) -> Ordering {
 		self.price.cmp(&other.price)
@@ -185,7 +187,9 @@ impl<AccountId> Ord for Bid<AccountId> {
 
 /// Error returned from `remove_coins` if there is an over- or underflow.
 pub enum BidError {
+	/// `remove_coins` overflowed.
 	Overflow,
+	/// `remove_coins` underflowed.
 	Underflow,
 }
 
@@ -272,7 +276,9 @@ decl_error! {
 		BalanceOverflow,
 		/// Something went very wrong and the price of the currency is zero.
 		ZeroPrice,
+		/// An arithmetic operation caused an overflow.
 		GenericOverflow,
+		/// An arithmetic operation caused an underflow.
 		GenericUnderflow,
 		/// The bidder tried to pay more than 100% for a bond.
 		BondPriceOver100Percent,
@@ -422,6 +428,8 @@ decl_module! {
 	}
 }
 
+// Implement the BasicCurrency to allow other pallets to interact programmatically
+// with the Stablecoin.
 impl<T: Trait> BasicCurrency<T::AccountId> for Module<T> {
 	type Balance = Coins;
 
