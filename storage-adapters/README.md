@@ -1,5 +1,5 @@
 `storage-adapters = '0.0.1'`
-> note: unpublished
+> Note: Not published to crates.io
 
 # Transient Storage Adapters
 
