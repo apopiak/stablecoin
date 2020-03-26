@@ -76,9 +76,24 @@ Stablecoin: pallet_stablecoin::{Module, Call, Storage, Event<T>},
 
 ### Genesis Configuration
 
-This template pallet does not have any genesis configuration.
+Runtimes using the pallet need to add the `StablecoinConfig` to their genesis config like in the following example:
 
-TODO: Allow initialization at genesis time.
+```rust
+use node_template_runtime::{ // ... other imports
+    StablecoinConfig
+};
+// ...
+
+    GenesisConfig {
+        system: Some(SystemConfig { /* elided */ }),
+        // ... other configs
+        stablecoin: Some(StablecoinConfig {
+			shareholders: endowed_accounts.iter().cloned().map(|acc| (acc, 1)).collect(),
+        }),
+    }
+```
+
+The config expects a `Vec(AccountId, u64)`. With this config the endowed accounts will be the shareholders of the stablecoin.
 
 ## Implementation
 

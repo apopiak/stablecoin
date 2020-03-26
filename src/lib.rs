@@ -67,6 +67,27 @@
 //! Stablecoin: pallet_stablecoin::{Module, Call, Storage, Event<T>},
 //! ```
 //!
+//! ### GenesisConfig `chain_spec.rs`
+//! 
+//! The config expects a `Vec(AccountId, u64)` to initialize the shareholders.
+//! See the following snippet for an example:
+//! 
+//! ```rust, ignore
+//! use node_template_runtime::{ // ... other imports
+//!     StablecoinConfig
+//! };
+//! // ...
+//! 
+//!     GenesisConfig {
+//!         system: Some(SystemConfig { /* elided */ }),
+//!         // ... other configs
+//!         stablecoin: Some(StablecoinConfig {
+//! 			shareholders: endowed_accounts.iter().cloned().map(|acc| (acc, 1)).collect(),
+//!         }),
+//!     }
+//! ```
+//! 
+//! With this config the endowed accounts will be the shareholders of the stablecoin.
 #![cfg_attr(not(feature = "std"), no_std)]
 #![warn(missing_docs)]
 
