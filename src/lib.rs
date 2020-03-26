@@ -5,7 +5,7 @@
 //!
 //! **Note: Example project for illustration, NOT audited and NOT production ready.**
 //!
-//! ## Dependecies
+//! ## Dependencies
 //!
 //! This pallet depends on an external implementation of its `FetchPrice` trait - for example by an offchain worker - to act as a price oracle.
 //!
@@ -69,10 +69,11 @@
 //!
 //! ### GenesisConfig `chain_spec.rs`
 //! 
+//! Runtimes using the pallet need to add the `StablecoinConfig` to their genesis config.
 //! The config expects a `Vec(AccountId, u64)` to initialize the shareholders.
 //! See the following snippet for an example:
 //! 
-//! ```rust, ignore
+//! ```rust,ignore
 //! use node_template_runtime::{ // ... other imports
 //!     StablecoinConfig
 //! };
