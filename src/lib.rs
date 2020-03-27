@@ -345,6 +345,7 @@ decl_storage! {
 		BondBids get(fn bond_bids): Vec<Bid<T::AccountId>>;
 	}
 	add_extra_genesis {
+		/// The shareholders to initialize the stablecoin with.
 		config(shareholders):
 			Vec<(T::AccountId, u64)>;
 		build(|config: &GenesisConfig<T>| {
@@ -366,8 +367,8 @@ decl_storage! {
 	}
 }
 
-// The pallet's dispatchable functions.
 decl_module! {
+	/// The pallet's dispatchable functions.
 	pub struct Module<T: Trait> for enum Call where origin: T::Origin {
 		/// The minimum percentage to pay for a bond.
 		const MinimumBondPrice: Perbill = T::MinimumBondPrice::get();
