@@ -25,14 +25,15 @@
 //! Note: You might want to introduce a helper function that wraps the complex
 //! types and just returns the boxed trait object.
 
-use codec::{Codec, EncodeLike};
+use codec::FullCodec;
 use core::marker::PhantomData;
 use frame_support::storage::{StorageMap, StorageValue};
+use num_traits::{WrappingAdd, WrappingSub};
 
 /// Trait object presenting the ringbuffer interface.
 pub trait RingBufferTrait<Item>
 where
-	Item: Codec + EncodeLike,
+	Item: FullCodec,
 {
 
 	/// Store all changes made in the underlying storage.
@@ -56,38 +57,14 @@ where
 	fn is_empty(&self) -> bool;
 }
 
-pub trait WrappingOps
-{
-	fn wrapping_add(self, rhs: Self) -> Self;
-	fn wrapping_sub(self, rhs: Self) -> Self;
-}
-
-macro_rules! impl_wrapping_ops {
-	($type:ty) => {
-		impl WrappingOps for $type {
-			fn wrapping_add(self, rhs: Self) -> Self {
-				self.wrapping_add(rhs)
-			}
-			fn wrapping_sub(self, rhs: Self) -> Self {
-				self.wrapping_sub(rhs)
-			}
-		}
-	};
-}
-
-impl_wrapping_ops!(u8);
-impl_wrapping_ops!(u16);
-impl_wrapping_ops!(u32);
-impl_wrapping_ops!(u64);
-
 type DefaultIdx = u16;
 /// Transient backing data that is the backbone of the trait object.
 pub struct RingBufferTransient<Item, B, M, Index = DefaultIdx>
 where
-	Item: Codec + EncodeLike,
+	Item: FullCodec,
 	B: StorageValue<(Index, Index), Query = (Index, Index)>,
 	M: StorageMap<Index, Item, Query = Item>,
-	Index: Codec + EncodeLike + Eq + WrappingOps + From<u8> + Copy,
+	Index: FullCodec + Eq + WrappingAdd + WrappingSub + From<u8> + Copy,
 {
 	start: Index,
 	end: Index,
@@ -96,10 +73,10 @@ where
 
 impl<Item, B, M, Index> RingBufferTransient<Item, B, M, Index>
 where
-	Item: Codec + EncodeLike,
+	Item: FullCodec,
 	B: StorageValue<(Index, Index), Query = (Index, Index)>,
 	M: StorageMap<Index, Item, Query = Item>,
-	Index: Codec + EncodeLike + Eq + WrappingOps + From<u8> + Copy,
+	Index: FullCodec + Eq + WrappingAdd + WrappingSub + From<u8> + Copy,
 {
 	/// Create a new `RingBufferTransient` that backs the ringbuffer implementation.
 	///
@@ -116,10 +93,10 @@ where
 
 impl<Item, B, M, Index> Drop for RingBufferTransient<Item, B, M, Index>
 where
-	Item: Codec + EncodeLike,
+	Item: FullCodec,
 	B: StorageValue<(Index, Index), Query = (Index, Index)>,
 	M: StorageMap<Index, Item, Query = Item>,
-	Index: Codec + EncodeLike + Eq + WrappingOps + From<u8> + Copy,
+	Index: FullCodec + Eq + WrappingAdd + WrappingSub + From<u8> + Copy,
 {
 	/// Commit on `drop`.
 	fn drop(&mut self) {
@@ -130,10 +107,10 @@ where
 /// Ringbuffer implementation based on `RingBufferTransient`
 impl<Item, B, M, Index> RingBufferTrait<Item> for RingBufferTransient<Item, B, M, Index>
 where
-	Item: Codec + EncodeLike,
+	Item: FullCodec,
 	B: StorageValue<(Index, Index), Query = (Index, Index)>,
 	M: StorageMap<Index, Item, Query = Item>,
-	Index: Codec + EncodeLike + Eq + WrappingOps + From<u8> + Copy,
+	Index: FullCodec + Eq + WrappingAdd + WrappingSub + From<u8> + Copy,
 {
 
 	/// Commit the (potentially) changed bounds to storage.
@@ -148,11 +125,11 @@ where
 		M::insert(self.end, item);
 		// this will intentionally overflow and wrap around when bonds_end
 		// reaches `Index::max_value` because we want a ringbuffer.
-		let next_index = self.end.wrapping_add(1.into());
+		let next_index = self.end.wrapping_add(&Index::from(1));
 		if next_index == self.start {
 			// queue presents as empty but is not
 			// --> overwrite the oldest item in the FIFO ringbuffer
-			self.start = self.start.wrapping_add(1.into());
+			self.start = self.start.wrapping_add(&Index::from(1));
 		}
 		self.end = next_index;
 	}
@@ -168,14 +145,14 @@ where
 			self.push(item);
 			return;
 		}
-		let index = self.start.wrapping_sub(1.into());
+		let index = self.start.wrapping_sub(&Index::from(1));
 		M::insert(index, item);
 		self.start = index;
 		if self.start == self.end {
 			// queue presents as empty but is not
 			// --> overwrite the most recent item in the queue
 			// TODO: Should we remove the item at the new `end` index?
-			self.end = self.end.wrapping_sub(1.into());
+			self.end = self.end.wrapping_sub(&Index::from(1));
 		}
 	}
 
@@ -187,7 +164,7 @@ where
 			return None;
 		}
 		let item = M::take(self.start);
-		self.start = self.start.wrapping_add(1.into());
+		self.start = self.start.wrapping_add(&Index::from(1));
 
 		item.into()
 	}

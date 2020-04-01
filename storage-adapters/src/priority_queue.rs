@@ -31,7 +31,7 @@
 //! Note: You might want to introduce a helper function that wraps the complex
 //! types and just returns the boxed trait object.
 
-use codec::{Codec, EncodeLike};
+use codec::FullCodec;
 use core::marker::PhantomData;
 use frame_support::{storage::StorageValue, traits::Get};
 use core::cmp::Ord;
@@ -39,7 +39,7 @@ use core::cmp::Ord;
 /// Trait object presenting the priority queue interface.
 pub trait BoundedPriorityQueueTrait<Item>
 where
-	Item: Codec + EncodeLike + Ord + Clone,
+	Item: FullCodec + Ord + Clone,
 {
 	/// The maximum amount of items in the queue.
 	type MaxLength: Get<u64>;
@@ -66,7 +66,7 @@ where
 /// Transient backing data that is the backbone of the trait object.
 pub struct PriorityQueueTransient<Item, Storage, MaxLength>
 where
-	Item: Codec + EncodeLike + Ord + Clone,
+	Item: FullCodec + Ord + Clone,
 	Storage: StorageValue<Vec<Item>, Query = Vec<Item>>,
 	MaxLength: Get<u64>,
 {
@@ -76,7 +76,7 @@ where
 
 impl<Item, Storage, MaxLength> PriorityQueueTransient<Item, Storage, MaxLength>
 where
-	Item: Codec + EncodeLike + Ord + Clone,
+	Item: FullCodec + Ord + Clone,
 	Storage: StorageValue<Vec<Item>, Query = Vec<Item>>,
 	MaxLength: Get<u64>,
 {
@@ -94,7 +94,7 @@ where
 
 impl<Item, Storage, MaxLength> Drop for PriorityQueueTransient<Item, Storage, MaxLength>
 where
-	Item: Codec + EncodeLike + Ord + Clone,
+	Item: FullCodec + Ord + Clone,
 	Storage: StorageValue<Vec<Item>, Query = Vec<Item>>,
 	MaxLength: Get<u64>,
 {
@@ -106,7 +106,7 @@ where
 
 impl<Item, Storage, MaxLength> BoundedPriorityQueueTrait<Item> for PriorityQueueTransient<Item, Storage, MaxLength>
 where
-	Item: Codec + EncodeLike + Ord + Clone,
+	Item: FullCodec + Ord + Clone,
 	Storage: StorageValue<Vec<Item>, Query = Vec<Item>>,
 	MaxLength: Get<u64>,
 {
