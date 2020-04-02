@@ -90,7 +90,6 @@
 //! 
 //! With this config the endowed accounts will be the shareholders of the stablecoin.
 #![cfg_attr(not(feature = "std"), no_std)]
-#![warn(missing_docs)]
 
 use sp_std::prelude::*;
 
