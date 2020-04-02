@@ -108,7 +108,7 @@ use num_rational::Ratio;
 use orml_traits::BasicCurrency;
 use sp_runtime::{
 	traits::{CheckedMul, Zero},
-	PerThing, Perbill,
+	PerThing, Perbill, RuntimeDebug,
 };
 use sp_std::collections::vec_deque::VecDeque;
 use system::ensure_signed;
@@ -162,8 +162,7 @@ pub trait Trait: system::Trait {
 ///
 /// + `account` is the recipient of the bond payout.
 /// + `payout` is the amount of Coins payed out.
-#[derive(Encode, Decode, Default, Clone, PartialEq, PartialOrd, Eq, Ord)]
-#[cfg_attr(feature = "std", derive(Debug))]
+#[derive(Encode, Decode, Default, Clone, PartialEq, PartialOrd, Eq, Ord, RuntimeDebug)]
 pub struct Bond<AccountId, BlockNumber> {
 	account: AccountId,
 	payout: Coins,
@@ -175,8 +174,7 @@ pub struct Bond<AccountId, BlockNumber> {
 /// + `account` is the bidder.
 /// + `price` is a percentage of 1 coin.
 /// + `quantity` is the amount of Coins gained on payout of the corresponding bond.
-#[derive(Encode, Decode, Default, Clone)]
-#[cfg_attr(feature = "std", derive(Debug))]
+#[derive(Encode, Decode, Default, Clone, RuntimeDebug)]
 pub struct Bid<AccountId> {
 	account: AccountId,
 	price: Perbill,
