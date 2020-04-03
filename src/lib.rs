@@ -83,7 +83,7 @@
 //!         system: Some(SystemConfig { /* elided */ }),
 //!         // ... other configs
 //!         stablecoin: Some(StablecoinConfig {
-//! 			shareholders: endowed_accounts.iter().cloned().map(|acc| (acc, 1)).collect(),
+//!             shareholders: endowed_accounts.iter().cloned().map(|acc| (acc, 1)).collect(),
 //!         }),
 //!     }
 //! ```
@@ -384,6 +384,10 @@ decl_module! {
 		fn deposit_event() = default;
 
 		/// Transfer `amount` Coins from the sender to the account `to`.
+		///
+		/// **Weight:**
+		/// - complexity: `O(1)`
+		/// - DB access: 2 storage map reads + 2 storage map writes
 		pub fn send_coins(origin, to: T::AccountId, amount: u64) -> DispatchResult {
 			let sender = ensure_signed(origin)?;
 			let res = Self::transfer_from_to(&sender, &to, amount);
@@ -399,6 +403,14 @@ decl_module! {
 		/// Example: `bid_for_bond(origin, Perbill::from_percent(80), 5 * BaseUnit)` will bid
 		/// for a bond with a payout of `5 * BaseUnit` Coins for a price of
 		/// `0.8 * 5 * BaseUnit = 4 * BaseUnit` Coins.
+		///
+		/// **Weight:**
+		/// - complexity: `O(B)`
+		///   - `B` being the number of bids in the bidding auction, limited to `MaximumBids`
+		/// - DB access:
+		///   - read and write bids from and to DB
+		///   - 1 DB storage map write to pay the bid
+		///   - 1 potential DB storage map write to refund evicted bid
 		pub fn bid_for_bond(origin, price: Perbill, quantity: Coins) -> DispatchResult {
 			let who = ensure_signed(origin)?;
 
@@ -418,6 +430,11 @@ decl_module! {
 		}
 
 		/// Cancel all bids at or below `price` of the sender and refund the Coins.
+		///
+		/// **Weight:**
+		/// - complexity: `O(B)`
+		///   - `B` being the number of bids in the bidding auction, limited to `MaximumBids`
+		/// - DB access: read and write bids from and to DB
 		pub fn cancel_bids_at_or_below(origin, price: Perbill) -> DispatchResult {
 			let who = ensure_signed(origin)?;
 			// ↑ verify ↑
@@ -429,6 +446,11 @@ decl_module! {
 		}
 
 		/// Cancel all bids belonging to the sender and refund the Coins.
+		///
+		/// **Weight:**
+		/// - complexity: `O(B)`
+		///   - `B` being the number of bids in the bidding auction, limited to `MaximumBids`
+		/// - DB access: read and write bids from and to DB
 		pub fn cancel_all_bids(origin) -> DispatchResult {
 			let who = ensure_signed(origin)?;
 			// ↑ verify ↑
@@ -440,6 +462,11 @@ decl_module! {
 		}
 
 		/// Adjust the amount of Coins according to the price.
+		///
+		/// **Weight:**
+		/// - complexity: `O(F + P)`
+		///   - `F` being the complexity of `CoinPrice::fetch_price()`
+		///   - `P` being the complexity of `on_block_with_price`
 		fn on_initialize(n: T::BlockNumber) {
 			let price = T::CoinPrice::fetch_price();
 			Self::on_block_with_price(n, price).unwrap_or_else(|e| {
@@ -455,11 +482,19 @@ impl<T: Trait> BasicCurrency<T::AccountId> for Module<T> {
 	type Balance = Coins;
 
 	/// Return the amount of Coins in circulation.
+	///
+	/// **Weight:**
+	/// - complexity: `O(1)`
+	/// - DB access: 1 read
 	fn total_issuance() -> Self::Balance {
 		Self::coin_supply()
 	}
 
 	/// Return the balance of the given account.
+	///
+	/// **Weight:**
+	/// - complexity: `O(1)`
+	/// - DB access: 1 read from balance storage map
 	fn total_balance(who: &T::AccountId) -> Self::Balance {
 		Self::get_balance(who)
 	}
@@ -467,6 +502,10 @@ impl<T: Trait> BasicCurrency<T::AccountId> for Module<T> {
 	/// Return the free balance of the given account.
 	///
 	/// Equal to `total_balance` for this stablecoin.
+	///
+	/// **Weight:**
+	/// - complexity: `O(1)`
+	/// - DB access: 1 read from balance storage map
 	fn free_balance(who: &T::AccountId) -> Self::Balance {
 		Self::get_balance(who)
 	}
@@ -480,21 +519,29 @@ impl<T: Trait> BasicCurrency<T::AccountId> for Module<T> {
 	}
 
 	/// Transfer `amount` from one account to another.
+	///
+	/// **Weight:**
+	/// - complexity: `O(1)`
+	/// - DB access: 2 reads and write from and to balance storage map
 	fn transfer(from: &T::AccountId, to: &T::AccountId, amount: Self::Balance) -> DispatchResult {
 		Self::transfer_from_to(from, to, amount)
 	}
 
-	/// Add `amount` to the balance of `who` and increase total issuance.
+	/// Noop that returns an error. Cannot change the issuance of a stablecoin.
 	fn deposit(_who: &T::AccountId, _amount: Self::Balance) -> DispatchResult {
 		Err(DispatchError::Other("cannot change issuance for stablecoins"))
 	}
 
-	/// Remove `amount` from the balance of `who` and reduce total issuance.
+	/// Noop that returns an error. Cannot change the issuance of a stablecoin.
 	fn withdraw(_who: &T::AccountId, _amount: Self::Balance) -> DispatchResult {
 		Err(DispatchError::Other("cannot change issuance for stablecoins"))
 	}
 
 	/// Test whether the given account can be slashed with `value`.
+	///
+	/// **Weight:**
+	/// - complexity: `O(1)`
+	/// - DB access: 1 read from balance storage map
 	fn can_slash(who: &T::AccountId, value: Self::Balance) -> bool {
 		if value.is_zero() {
 			return true;
@@ -506,6 +553,10 @@ impl<T: Trait> BasicCurrency<T::AccountId> for Module<T> {
 	///
 	/// If the account does not have `amount` Coins it will be slashed to 0
 	/// and that amount returned.
+	///
+	/// **Weight:**
+	/// - complexity: `O(1)`
+	/// - DB access: 1 write to balance storage map
 	fn slash(who: &T::AccountId, amount: Self::Balance) -> Self::Balance {
 		let mut remaining: Coins = 0;
 		<Balance<T>>::mutate(who, |b: &mut u64| {
@@ -525,6 +576,10 @@ impl<T: Trait> Module<T> {
 	// balances
 
 	/// Transfer `amount` of Coins from one account to another.
+	/// 
+	/// **Weight:**
+	/// - complexity: `O(1)`
+	/// - DB access: 2 storage map reads + 2 storage map writes
 	fn transfer_from_to(from: &T::AccountId, to: &T::AccountId, amount: Coins) -> DispatchResult {
 		let from_balance = Self::get_balance(from);
 		let updated_from_balance = from_balance
@@ -547,6 +602,10 @@ impl<T: Trait> Module<T> {
 	}
 
 	/// Add `amount` Coins to the balance for `account`.
+	///
+	/// **Weight:**
+	/// - complexity: `O(1)`
+	/// - DB access: 1 write to balance storage map
 	fn add_balance(account: &T::AccountId, amount: Coins) {
 		<Balance<T>>::mutate(account, |b: &mut u64| {
 			*b = b.saturating_add(amount);
@@ -555,6 +614,10 @@ impl<T: Trait> Module<T> {
 	}
 
 	/// Remove `amount` Coins from the balance of `account`.
+	///
+	/// **Weight:**
+	/// - complexity: `O(1)`
+	/// - DB access: 1 write to balance storage map
 	fn remove_balance(account: &T::AccountId, amount: Coins) -> DispatchResult {
 		<Balance<T>>::try_mutate(&account, |b: &mut u64| -> DispatchResult {
 			*b = b.checked_sub(amount).ok_or(Error::<T>::InsufficientBalance)?;
@@ -575,6 +638,12 @@ impl<T: Trait> Module<T> {
 	}
 
 	/// Add a bid to the queue.
+	///
+	/// **Weight:**
+	/// - complexity: `O(B)` with `B` being the amount of bids
+	/// - DB access:
+	///   - read and write `B` bids
+	///   - potentially call 1 `refund_bid`
 	fn add_bid(bid: Bid<T::AccountId>) {
 		Self::bids_transient()
 			.push(bid)
@@ -582,12 +651,22 @@ impl<T: Trait> Module<T> {
 	}
 
 	/// Refund the Coins payed for `bid` to the account that bid.
+	///
+	/// **Weight:**
+	/// - complexity: `O(1)`
+	/// - DB access: 1 write
 	fn refund_bid(bid: &Bid<T::AccountId>) {
 		Self::add_balance(&bid.account, bid.payment());
 		Self::deposit_event(RawEvent::RefundedBid(bid.account.clone(), bid.payment()));
 	}
 
 	/// Cancel all bids where `cancel_for` returns true and refund the bidders.
+	///
+	/// **Weight:**
+	/// - complexity: `O(B)` with `B` being the amount of bids
+	/// - DB access:
+	///   - read and write `B` bids
+	///   - call `refund_bid` up to `B` times
 	fn cancel_bids<F>(cancel_for: F)
 	where
 		F: Fn(&Bid<T::AccountId>) -> bool,
@@ -608,6 +687,17 @@ impl<T: Trait> Module<T> {
 	/// Tries to contract the supply by `amount` by converting bids to bonds.
 	///
 	/// Note: Could contract the supply by less than `amount` if there are not enough bids.
+	///
+	/// **Weight:**
+	/// - complexity: `O(BI + BO + C)`
+	///   - `BI` being the number of bids in the bidding auction, limited to `MaximumBids`
+	///   - `BO` being the number of newly created bonds, limited to `BI`
+	///   - `C` being a constant amount of storage reads and writes for coin supply and bonds queue bounds bookkeeping
+	/// - DB access:
+	///   - 1 write for `coin_supply`
+	///   - read and write bids
+	///   - write `BO` newly created bonds + read and write bonds queue bounds
+	///   - potentially refund up to `BI` bids
 	fn contract_supply(coin_supply: Coins, amount: Coins) -> DispatchResult {
 		// Checking whether coin supply would underflow.
 		let remaining_supply = coin_supply
@@ -711,6 +801,16 @@ impl<T: Trait> Module<T> {
 	///
 	/// Will first pay out bonds and only pay out shares if there are no remaining
 	/// bonds.
+	///
+	/// **Weight:**
+	/// - complexity: `O(B + C + H)`
+	///   - `B` being the number of bonds, bounded by ringbuffer size, currently `u16::max_value()`
+	///   - `C` being a constant amount of storage reads and writes for coin supply and bonds queue bounds bookkeeping
+	///   - `H` being the complexity of `hand_out_coins`
+	/// - DB access:
+	///   - read bonds + read and write bonds queue bounds
+	///   - potentially write back 1 bond
+	///   - 1 write for `coin_supply` OR read shares and execute `hand_out_coins` which has DB accesses
 	fn expand_supply(coin_supply: Coins, amount: Coins) -> DispatchResult {
 		// Checking whether the supply will overflow.
 		coin_supply
@@ -766,9 +866,18 @@ impl<T: Trait> Module<T> {
 		Ok(())
 	}
 
-	// Will hand out Coins to shareholders according to their number of shares.
-	// Will hand out more Coins to shareholders at the beginning of the list
-	// if the handout cannot be equal.
+	/// Hand out Coins to shareholders according to their number of shares.
+	///
+	/// Will hand out more Coins to shareholders at the beginning of the list
+	/// if the handout cannot be equal.
+	///
+	/// **Weight:**
+	/// - complexity: `O(S + C)`
+	///   - `S` being `shares.len()` (the number of shareholders)
+	///   - `C` being a constant amount of storage reads and writes for coin supply
+	/// - DB access:
+	///   - 1 write for `coin_supply`
+	///   - `S` amount of writes
 	fn hand_out_coins(shares: &[(T::AccountId, u64)], amount: Coins, coin_supply: Coins) -> DispatchResult {
 		// Checking whether the supply will overflow.
 		coin_supply
@@ -812,6 +921,10 @@ impl<T: Trait> Module<T> {
 	// on block
 
 	/// Contracts or expands the supply based on conditions.
+	///
+	/// **Weight:**
+	/// Calls `expand_or_contract_on_price` every `AdjustmentFrequency` blocks.
+	/// - complexity: `O(P)` with `P` being the complexity of `expand_or_contract_on_price`
 	fn on_block_with_price(block: T::BlockNumber, price: Coins) -> DispatchResult {
 		// This can be changed to only correct for small or big price swings.
 		if block % T::AdjustmentFrequency::get() == 0.into() {
@@ -822,6 +935,14 @@ impl<T: Trait> Module<T> {
 	}
 
 	/// Expands (if the price is too high) or contracts (if the price is too low) the coin supply.
+	///
+	/// **Weight:**
+	/// - complexity: `O(S + C)`
+	///   - `S` being the complexity of executing either `expand_supply` or `contract_supply`
+	///   - `C` being a constant amount of storage reads for coin supply
+	/// - DB access:
+	///   - 1 read for coin_supply
+	///   - execute `expand_supply` OR execute `contract_supply` which have DB accesses
 	fn expand_or_contract_on_price(price: Coins) -> DispatchResult {
 		match price {
 			0 => {
@@ -847,9 +968,10 @@ impl<T: Trait> Module<T> {
 		Ok(())
 	}
 
-	fn calculate_supply_change(nominator: u64, denominator: u64, supply: u64) -> u64 {
+	/// Calculate the amount of supply change from a fraction given as `numerator` and `denominator`.
+	fn calculate_supply_change(numerator: u64, denominator: u64, supply: u64) -> u64 {
 		type Fix = FixedU128<U64>;
-		let fraction = Fix::from_num(nominator) / Fix::from_num(denominator) - Fix::from_num(1);
+		let fraction = Fix::from_num(numerator) / Fix::from_num(denominator) - Fix::from_num(1);
 		fraction.saturating_mul_int(supply as u128).to_num::<u64>()
 	}
 }
