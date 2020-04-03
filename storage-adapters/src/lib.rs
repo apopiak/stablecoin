@@ -9,4 +9,4 @@ pub mod priority_queue;
 pub mod ringbuffer;
 
 pub use priority_queue::BoundedPriorityQueue;
-pub use ringbuffer::RingBuffer;
+pub use ringbuffer::BoundedDequeue;
