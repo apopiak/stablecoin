@@ -68,17 +68,17 @@
 //! ```
 //!
 //! ### GenesisConfig `chain_spec.rs`
-//! 
+//!
 //! Runtimes using the pallet need to add the `StablecoinConfig` to their genesis config.
 //! The config expects a `Vec(AccountId, u64)` to initialize the shareholders.
 //! See the following snippet for an example:
-//! 
+//!
 //! ```rust,ignore
 //! use node_template_runtime::{ // ... other imports
 //!     StablecoinConfig
 //! };
 //! // ...
-//! 
+//!
 //!     GenesisConfig {
 //!         system: Some(SystemConfig { /* elided */ }),
 //!         // ... other configs
@@ -87,16 +87,16 @@
 //!         }),
 //!     }
 //! ```
-//! 
+//!
 //! With this config the endowed accounts will be the shareholders of the stablecoin.
 #![cfg_attr(not(feature = "std"), no_std)]
-#![warn(missing_docs)]
 
 use sp_std::prelude::*;
 
 use adapters::{BoundedPriorityQueueTrait, PriorityQueueTransient, RingBufferTrait, RingBufferTransient};
 use codec::{Decode, Encode};
 use core::cmp::{max, min, Ord, Ordering};
+use fixed::{types::extra::U64, FixedU128};
 use frame_support::{
 	debug::native,
 	decl_error, decl_event, decl_module, decl_storage,
@@ -108,13 +108,10 @@ use num_rational::Ratio;
 use orml_traits::BasicCurrency;
 use sp_runtime::{
 	traits::{CheckedMul, Zero},
-	Fixed64, PerThing, Perbill,
+	PerThing, Perbill, RuntimeDebug,
 };
 use sp_std::collections::vec_deque::VecDeque;
 use system::ensure_signed;
-
-mod utils;
-use utils::saturated_mul;
 
 /// Expected price oracle interface. `fetch_price` must return the amount of Coins exchanged for the tracked value.
 pub trait FetchPrice<Balance> {
@@ -165,8 +162,7 @@ pub trait Trait: system::Trait {
 ///
 /// + `account` is the recipient of the bond payout.
 /// + `payout` is the amount of Coins payed out.
-#[derive(Encode, Decode, Default, Clone, PartialEq, PartialOrd, Eq, Ord)]
-#[cfg_attr(feature = "std", derive(Debug))]
+#[derive(Encode, Decode, Default, Clone, PartialEq, PartialOrd, Eq, Ord, RuntimeDebug)]
 pub struct Bond<AccountId, BlockNumber> {
 	account: AccountId,
 	payout: Coins,
@@ -178,8 +174,7 @@ pub struct Bond<AccountId, BlockNumber> {
 /// + `account` is the bidder.
 /// + `price` is a percentage of 1 coin.
 /// + `quantity` is the amount of Coins gained on payout of the corresponding bond.
-#[derive(Encode, Decode, Default, Clone)]
-#[cfg_attr(feature = "std", derive(Debug))]
+#[derive(Encode, Decode, Default, Clone, RuntimeDebug)]
 pub struct Bid<AccountId> {
 	account: AccountId,
 	price: Perbill,
@@ -467,7 +462,7 @@ impl<T: Trait> BasicCurrency<T::AccountId> for Module<T> {
 	}
 
 	/// Return the free balance of the given account.
-	/// 
+	///
 	/// Equal to `total_balance` for this stablecoin.
 	fn free_balance(who: &T::AccountId) -> Self::Balance {
 		Self::get_balance(who)
@@ -505,7 +500,7 @@ impl<T: Trait> BasicCurrency<T::AccountId> for Module<T> {
 	}
 
 	/// Slash account `who` by `amount` returning the actual amount slashed.
-	/// 
+	///
 	/// If the account does not have `amount` Coins it will be slashed to 0
 	/// and that amount returned.
 	fn slash(who: &T::AccountId, amount: Self::Balance) -> Self::Balance {
@@ -832,18 +827,14 @@ impl<T: Trait> Module<T> {
 			}
 			price if price > T::BaseUnit::get() => {
 				// safe from underflow because `price` is checked to be greater than `BaseUnit`
-				let fraction =
-					Fixed64::from_rational(price as i64, T::BaseUnit::get()) - Fixed64::from_natural(1);
 				let supply = Self::coin_supply();
-				let contract_by = saturated_mul(fraction, supply);
+				let contract_by = Self::calculate_supply_change(price, T::BaseUnit::get(), supply);
 				Self::contract_supply(supply, contract_by)?;
 			}
 			price if price < T::BaseUnit::get() => {
 				// safe from underflow because `price` is checked to be less than `BaseUnit`
-				let fraction =
-					Fixed64::from_rational(T::BaseUnit::get() as i64, price) - Fixed64::from_natural(1);
 				let supply = Self::coin_supply();
-				let expand_by = saturated_mul(fraction, supply);
+				let expand_by = Self::calculate_supply_change(T::BaseUnit::get(), price, supply);
 				Self::expand_supply(supply, expand_by)?;
 			}
 			_ => {
@@ -851,6 +842,12 @@ impl<T: Trait> Module<T> {
 			}
 		}
 		Ok(())
+	}
+
+	fn calculate_supply_change(nominator: u64, denominator: u64, supply: u64) -> u64 {
+		type Fix = FixedU128<U64>;
+		let fraction = Fix::from_num(nominator) / Fix::from_num(denominator) - Fix::from_num(1);
+		fraction.saturating_mul_int(supply as u128).to_num::<u64>()
 	}
 }
 
@@ -870,7 +867,7 @@ mod tests {
 	use sp_runtime::{
 		testing::Header,
 		traits::{BlakeTwo256, IdentityLookup},
-		Perbill,
+		Fixed64, Perbill,
 	};
 	use sp_std::iter;
 	use system;
@@ -879,8 +876,8 @@ mod tests {
 		pub enum Origin for Test {}
 	}
 
-	const BASE_UNIT: u64 = 1000;
-	static LAST_PRICE: AtomicU64 = AtomicU64::new(BASE_UNIT);
+	const TEST_BASE_UNIT: u64 = 1000;
+	static LAST_PRICE: AtomicU64 = AtomicU64::new(TEST_BASE_UNIT);
 	pub struct RandomPrice;
 
 	impl FetchPrice<Coins> for RandomPrice {
@@ -915,7 +912,7 @@ mod tests {
 		pub const MaximumBids: u64 = 10;
 		// adjust supply every second block
 		pub const AdjustmentFrequency: u64 = 2;
-		pub const BaseUnit: u64 = BASE_UNIT;
+		pub const BaseUnit: u64 = TEST_BASE_UNIT;
 		pub const InitialSupply: u64 = 100 * BaseUnit::get();
 		pub const MinimumSupply: u64 = BaseUnit::get();
 		pub const MinimumBondPrice: Perbill = Perbill::from_percent(10);
@@ -1034,7 +1031,7 @@ mod tests {
 		new_test_ext().execute_with(|| {
 			let first_acc = 1;
 			let second_acc = 2;
-			let amount = BASE_UNIT;
+			let amount = TEST_BASE_UNIT;
 			let from_balance_before = Stablecoin::get_balance(first_acc);
 			let to_balance_before = Stablecoin::get_balance(second_acc);
 			assert_ok!(Stablecoin::transfer_from_to(&first_acc, &second_acc, amount));
@@ -1049,7 +1046,7 @@ mod tests {
 	fn slash_test() {
 		new_test_ext().execute_with(|| {
 			let acc = 1;
-			let amount = BASE_UNIT;
+			let amount = TEST_BASE_UNIT;
 			let balance_before = Stablecoin::get_balance(acc);
 			assert_eq!(Stablecoin::slash(&acc, amount), 0);
 			assert_eq!(Stablecoin::get_balance(acc), balance_before - amount);
@@ -1462,7 +1459,9 @@ mod tests {
 
 			let bids = Stablecoin::bond_bids();
 			assert_eq!(bids.len(), 1, "exactly one bid should have been removed");
-			let remainging_bid_quantity = saturated_mul(Fixed64::from_rational(667, 1_000), BaseUnit::get());
+			let remainging_bid_quantity = Fixed64::from_rational(667, 1_000)
+				.saturated_multiply_accumulate(BaseUnit::get())
+				- BaseUnit::get();
 			assert_eq!(
 				bids[0],
 				Bid::new(2, Perbill::from_percent(75), remainging_bid_quantity)
@@ -1501,7 +1500,15 @@ mod tests {
 					// this assert might actually produce a false positive
 					// as there might be errors returned that are the correct
 					// behavior for the given parameters
-					assert_ok!(Stablecoin::expand_or_contract_on_price(price));
+					assert!(matches!(
+						Stablecoin::expand_or_contract_on_price(price),
+						Ok(())
+							| Err(DispatchError::Module {
+								index: 0,
+								error: 0,
+								message: Some("CoinSupplyOverflow")
+							})
+					));
 				}
 
 				TestResult::passed()
@@ -1535,5 +1542,15 @@ mod tests {
 				});
 			}
 		})
+	}
+
+	#[test]
+	fn supply_change_calculation() {
+		let price = TEST_BASE_UNIT + 100;
+		let supply = u64::max_value();
+		let contract_by = Stablecoin::calculate_supply_change(price, TEST_BASE_UNIT, supply);
+		// the error should be low enough
+		assert_ge!(contract_by, u64::max_value() / 10 - 1);
+		assert_le!(contract_by, u64::max_value() / 10 + 1);
 	}
 }

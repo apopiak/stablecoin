@@ -23,6 +23,7 @@ adapters = { default-features = false, package = 'storage-adapters', version = '
 # regular deps
 codec = { default-features = false, features = ['derive'], package = 'parity-scale-codec', version = '1.2.0' }
 num-rational = { default-features = false, version = "0.2" }
+fixed = { default-features = false, git = "https://github.com/encointer/substrate-fixed", package = "substrate-fixed" }
 # substrate deps
 frame-support = { default-features = false, version = '2.0.0-alpha.3' }
 sp-io = { default-features = false, version = '2.0.0-alpha.3' }

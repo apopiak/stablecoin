@@ -25,6 +25,7 @@ sp-io = { default-features = false, version = '2.0.0-alpha.3' }
 sp-runtime = { default-features = false, version = '2.0.0-alpha.3' }
 sp-std = { default-features = false, version = '2.0.0-alpha.3' }
 system = { default-features = false, package = 'frame-system', version = '2.0.0-alpha.3' }
+num-traits = "0.2.11"
 
 [dev-dependencies]
 itertools = "0.8.2"
