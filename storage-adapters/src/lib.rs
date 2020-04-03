@@ -6,7 +6,7 @@
 //! Implements a ringbuffer queue in the `ringbuffer` module.
 
 pub mod priority_queue;
-pub mod ringbuffer;
+pub mod bounded_deque;
 
 pub use priority_queue::BoundedPriorityQueue;
-pub use ringbuffer::BoundedDequeue;
+pub use bounded_deque::BoundedDequeue;
