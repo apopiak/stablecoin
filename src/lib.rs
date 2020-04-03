@@ -93,7 +93,7 @@
 
 use sp_std::prelude::*;
 
-use adapters::{BoundedPriorityQueue, RingBuffer};
+use adapters::{BoundedPriorityQueue, BoundedDeque};
 use codec::{Decode, Encode};
 use core::cmp::{max, min, Ord, Ordering};
 use fixed::{types::extra::U64, FixedU128};
@@ -756,7 +756,7 @@ impl<T: Trait> Module<T> {
 		}
 		let mut bonds = Self::bonds_transient();
 		for bond in new_bonds {
-			bonds.push(bond);
+			bonds.push_back(bond);
 		}
 		<CoinSupply>::put(new_supply);
 		Self::deposit_event(RawEvent::ContractedSupply(burned));
@@ -782,13 +782,13 @@ impl<T: Trait> Module<T> {
 	/// Create a new transient storage adapter that manages the bonds.
 	///
 	/// Allows pushing and popping on a ringbuffer without managing the storage details.
-	fn bonds_transient() -> RingBuffer<
+	fn bonds_transient() -> BoundedDeque<
 		Bond<T::AccountId, T::BlockNumber>,
 		<Self as Store>::BondsRange,
 		<Self as Store>::Bonds,
 		BondIndex,
 	> {
-		RingBuffer::<
+		BoundedDeque::<
 			Bond<T::AccountId, T::BlockNumber>,
 			<Self as Store>::BondsRange,
 			<Self as Store>::Bonds,
@@ -826,7 +826,7 @@ impl<T: Trait> Module<T> {
 			account,
 			payout,
 			expiration,
-		}) = if remaining > 0 { bonds.pop() } else { None }
+		}) = if remaining > 0 { bonds.pop_front() } else { None }
 		{
 			// bond has expired --> discard
 			if <system::Module<T>>::block_number() >= expiration {
