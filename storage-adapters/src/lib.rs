@@ -8,5 +8,5 @@
 pub mod priority_queue;
 pub mod ringbuffer;
 
-pub use priority_queue::{BoundedPriorityQueueTrait, PriorityQueueTransient};
-pub use ringbuffer::{RingBufferTrait, RingBufferTransient};
+pub use priority_queue::BoundedPriorityQueue;
+pub use ringbuffer::RingBuffer;

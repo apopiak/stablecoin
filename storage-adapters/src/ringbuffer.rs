@@ -5,19 +5,16 @@
 //!
 //! Usage Example:
 //! ```rust,ignore
-//! use ringbuffer::{RingBufferTrait, RingBufferTransient};
+//! use storage_adapters::RingBuffer;
 //!
-//! // Trait object that we will be interacting with.
-//! type RingBuffer = dyn RingBufferTrait<SomeStruct>;
 //! // Implementation that we will instantiate.
-//! type Transient = RingBufferTransient<
+//! type Transient = RingBuffer<
 //!     SomeStruct,
 //!     <TestModule as Store>::TestRange,
 //!     <TestModule as Store>::TestMap,
-//!     RingBuffer,
 //! >;
 //! {
-//!     let mut ring: Box<RingBuffer> = Box::new(Transient::new());
+//!     let mut ring = Transient::new();
 //!     ring.push(SomeStruct { foo: 1, bar: 2 });
 //! } // `ring.commit()` will be called on `drop` here and syncs to storage
 //! ```
@@ -30,36 +27,9 @@ use core::marker::PhantomData;
 use frame_support::storage::{StorageMap, StorageValue};
 use num_traits::{WrappingAdd, WrappingSub};
 
-/// Trait object presenting the ringbuffer interface.
-pub trait RingBufferTrait<Item>
-where
-	Item: FullCodec,
-{
-
-	/// Store all changes made in the underlying storage.
-	///
-	/// Data is not guaranteed to be consistent before this call.
-	/// 
-	/// Implementation note: Call in `drop` to increase ergonomics.
-	fn commit(&self);
-
-	/// Push an item onto the end of the queue.
-	fn push(&mut self, i: Item);
-	/// Push an item onto the front of the queue.
-	fn push_front(&mut self, i: Item);
-
-	/// Pop an item from the start of the queue.
-	///
-	/// Returns `None` if the queue is empty.
-	fn pop(&mut self) -> Option<Item>;
-
-	/// Return whether the queue is empty.
-	fn is_empty(&self) -> bool;
-}
-
 type DefaultIdx = u16;
-/// Transient backing data that is the backbone of the trait object.
-pub struct RingBufferTransient<Item, B, M, Index = DefaultIdx>
+/// Transient ringbuffer that sits on top of storage.
+pub struct RingBuffer<Item, B, M, Index = DefaultIdx>
 where
 	Item: FullCodec,
 	B: StorageValue<(Index, Index), Query = (Index, Index)>,
@@ -71,57 +41,35 @@ where
 	_phantom: PhantomData<(Item, B, M)>,
 }
 
-impl<Item, B, M, Index> RingBufferTransient<Item, B, M, Index>
+/// Ringbuffer implementation.
+impl<Item, B, M, Index> RingBuffer<Item, B, M, Index>
 where
 	Item: FullCodec,
 	B: StorageValue<(Index, Index), Query = (Index, Index)>,
 	M: StorageMap<Index, Item, Query = Item>,
 	Index: FullCodec + Eq + WrappingAdd + WrappingSub + From<u8> + Copy,
 {
-	/// Create a new `RingBufferTransient` that backs the ringbuffer implementation.
+	/// Create a new `RingBuffer` that backs the ringbuffer implementation.
 	///
 	/// Initializes itself from the `Bounds` storage.
-	pub fn new() -> RingBufferTransient<Item, B, M, Index> {
+	pub fn new() -> RingBuffer<Item, B, M, Index> {
 		let (start, end) = B::get();
-		RingBufferTransient {
+		RingBuffer {
 			start,
 			end,
 			_phantom: PhantomData,
 		}
 	}
-}
-
-impl<Item, B, M, Index> Drop for RingBufferTransient<Item, B, M, Index>
-where
-	Item: FullCodec,
-	B: StorageValue<(Index, Index), Query = (Index, Index)>,
-	M: StorageMap<Index, Item, Query = Item>,
-	Index: FullCodec + Eq + WrappingAdd + WrappingSub + From<u8> + Copy,
-{
-	/// Commit on `drop`.
-	fn drop(&mut self) {
-		<Self as RingBufferTrait<Item>>::commit(self);
-	}
-}
-
-/// Ringbuffer implementation based on `RingBufferTransient`
-impl<Item, B, M, Index> RingBufferTrait<Item> for RingBufferTransient<Item, B, M, Index>
-where
-	Item: FullCodec,
-	B: StorageValue<(Index, Index), Query = (Index, Index)>,
-	M: StorageMap<Index, Item, Query = Item>,
-	Index: FullCodec + Eq + WrappingAdd + WrappingSub + From<u8> + Copy,
-{
 
 	/// Commit the (potentially) changed bounds to storage.
-	fn commit(&self) {
+	pub fn commit(&self) {
 		B::put((self.start, self.end));
 	}
 
 	/// Push an item onto the end of the queue.
 	///
 	/// Will insert the new item, but will not update the bounds in storage.
-	fn push(&mut self, item: Item) {
+	pub fn push(&mut self, item: Item) {
 		M::insert(self.end, item);
 		// this will intentionally overflow and wrap around when bonds_end
 		// reaches `Index::max_value` because we want a ringbuffer.
@@ -139,7 +87,7 @@ where
 	/// Equivalent to `push` if the queue is empty.
 	/// 
 	/// Will insert the new item, but will not update the bounds in storage.
-	fn push_front(&mut self, item: Item) {
+	pub fn push_front(&mut self, item: Item) {
 		if self.is_empty() {
 			// queue is empty --> regular push
 			self.push(item);
@@ -159,7 +107,7 @@ where
 	/// Pop an item from the start of the queue.
 	/// 
 	/// Will remove the item, but will not update the bounds in storage.
-	fn pop(&mut self) -> Option<Item> {
+	pub fn pop(&mut self) -> Option<Item> {
 		if self.is_empty() {
 			return None;
 		}
@@ -170,15 +118,27 @@ where
 	}
 
 	/// Return whether to consider the queue empty.
-	fn is_empty(&self) -> bool {
+	pub fn is_empty(&self) -> bool {
 		self.start == self.end
+	}
+}
+
+impl<Item, B, M, Index> Drop for RingBuffer<Item, B, M, Index>
+where
+	Item: FullCodec,
+	B: StorageValue<(Index, Index), Query = (Index, Index)>,
+	M: StorageMap<Index, Item, Query = Item>,
+	Index: FullCodec + Eq + WrappingAdd + WrappingSub + From<u8> + Copy,
+{
+	/// Commit on `drop`.
+	fn drop(&mut self) {
+		self.commit();
 	}
 }
 
 #[cfg(test)]
 mod tests {
 	use super::*;
-	use RingBufferTrait;
 
 	use codec::{Decode, Encode};
 	use frame_support::{decl_module, decl_storage, impl_outer_origin, parameter_types, weights::Weight};
@@ -265,10 +225,8 @@ mod tests {
 	// ------------------------------------------------------------
 	// ringbuffer
 
-	// Trait object that we will be interacting with.
-	type RingBuffer = dyn RingBufferTrait<SomeStruct>;
 	// Implementation that we will instantiate.
-	type Transient = RingBufferTransient<
+	type Transient = RingBuffer<
 		SomeStruct,
 		<TestModule as Store>::TestRange,
 		<TestModule as Store>::TestMap,
@@ -278,7 +236,7 @@ mod tests {
 	#[test]
 	fn simple_push() {
 		new_test_ext().execute_with(|| {
-			let mut ring: Box<RingBuffer> = Box::new(Transient::new());
+			let mut ring = Transient::new();
 			ring.push(SomeStruct { foo: 1, bar: 2 });
 			ring.commit();
 			let start_end = TestModule::get_test_range();
@@ -292,7 +250,7 @@ mod tests {
 	fn drop_does_commit() {
 		new_test_ext().execute_with(|| {
 			{
-				let mut ring: Box<RingBuffer> = Box::new(Transient::new());
+				let mut ring = Transient::new();
 				ring.push(SomeStruct { foo: 1, bar: 2 });
 			}
 			let start_end = TestModule::get_test_range();
@@ -305,7 +263,7 @@ mod tests {
 	#[test]
 	fn simple_pop() {
 		new_test_ext().execute_with(|| {
-			let mut ring: Box<RingBuffer> = Box::new(Transient::new());
+			let mut ring = Transient::new();
 			ring.push(SomeStruct { foo: 1, bar: 2 });
 
 			let item = ring.pop();
@@ -319,7 +277,7 @@ mod tests {
 	#[test]
 	fn overflow_wrap_around() {
 		new_test_ext().execute_with(|| {
-			let mut ring: Box<RingBuffer> = Box::new(Transient::new());
+			let mut ring = Transient::new();
 
 			for i in 1..(TestIdx::max_value() as u64) + 2 {
 				ring.push(SomeStruct { foo: 42, bar: i });
@@ -370,7 +328,7 @@ mod tests {
 	#[test]
 	fn simple_push_front() {
 		new_test_ext().execute_with(|| {
-			let mut ring: Box<RingBuffer> = Box::new(Transient::new());
+			let mut ring = Transient::new();
 			ring.push_front(SomeStruct { foo: 1, bar: 2 });
 			ring.commit();
 			let start_end = TestModule::get_test_range();

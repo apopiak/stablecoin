@@ -93,7 +93,7 @@
 
 use sp_std::prelude::*;
 
-use adapters::{BoundedPriorityQueueTrait, PriorityQueueTransient, RingBufferTrait, RingBufferTransient};
+use adapters::{BoundedPriorityQueue, RingBuffer};
 use codec::{Decode, Encode};
 use core::cmp::{max, min, Ord, Ordering};
 use fixed::{types::extra::U64, FixedU128};
@@ -576,7 +576,7 @@ impl<T: Trait> Module<T> {
 	// balances
 
 	/// Transfer `amount` of Coins from one account to another.
-	/// 
+	///
 	/// **Weight:**
 	/// - complexity: `O(1)`
 	/// - DB access: 2 storage map reads + 2 storage map writes
@@ -629,12 +629,9 @@ impl<T: Trait> Module<T> {
 	// bids
 
 	/// Construct a transient storage adapter for the bids priority queue.
-	fn bids_transient() -> Box<dyn BoundedPriorityQueueTrait<Bid<T::AccountId>, MaxLength = T::MaximumBids>> {
-		Box::new(PriorityQueueTransient::<
-			Bid<T::AccountId>,
-			<Self as Store>::BondBids,
-			T::MaximumBids,
-		>::new())
+	fn bids_transient() -> BoundedPriorityQueue<Bid<T::AccountId>, <Self as Store>::BondBids, T::MaximumBids>
+	{
+		BoundedPriorityQueue::<Bid<T::AccountId>, <Self as Store>::BondBids, T::MaximumBids>::new()
 	}
 
 	/// Add a bid to the queue.
@@ -785,13 +782,18 @@ impl<T: Trait> Module<T> {
 	/// Create a new transient storage adapter that manages the bonds.
 	///
 	/// Allows pushing and popping on a ringbuffer without managing the storage details.
-	fn bonds_transient() -> Box<dyn RingBufferTrait<Bond<T::AccountId, T::BlockNumber>>> {
-		Box::new(RingBufferTransient::<
+	fn bonds_transient() -> RingBuffer<
+		Bond<T::AccountId, T::BlockNumber>,
+		<Self as Store>::BondsRange,
+		<Self as Store>::Bonds,
+		BondIndex,
+	> {
+		RingBuffer::<
 			Bond<T::AccountId, T::BlockNumber>,
 			<Self as Store>::BondsRange,
 			<Self as Store>::Bonds,
 			BondIndex,
-		>::new())
+		>::new()
 	}
 
 	// ------------------------------------------------------------

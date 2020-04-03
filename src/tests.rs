@@ -127,14 +127,12 @@ fn new_test_ext_with(shareholders: Vec<AccountId>) -> sp_io::TestExternalities {
 // ------------------------------------------------------------
 // utils
 type BondT = Bond<AccountId, BlockNumber>;
-// Trait object that we will be interacting with.
-type RingBuffer = dyn RingBufferTrait<BondT>;
 // Implementation that we will instantiate.
 type Transient =
-	RingBufferTransient<BondT, <Stablecoin as Store>::BondsRange, <Stablecoin as Store>::Bonds, BondIndex>;
+	RingBuffer<BondT, <Stablecoin as Store>::BondsRange, <Stablecoin as Store>::Bonds, BondIndex>;
 
 fn add_bond(bond: BondT) {
-	let mut bonds: Box<RingBuffer> = Box::new(Transient::new());
+	let mut bonds = Transient::new();
 	bonds.push(bond);
 	bonds.commit();
 }
