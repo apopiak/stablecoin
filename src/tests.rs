@@ -1,5 +1,4 @@
 /// tests for this pallet
-#[cfg(test)]
 use super::*;
 use itertools::Itertools;
 use log;
@@ -13,7 +12,7 @@ use sp_core::H256;
 use sp_runtime::{
 	testing::Header,
 	traits::{BlakeTwo256, IdentityLookup},
-	Perbill,
+	Fixed64, Perbill,
 };
 use sp_std::iter;
 use system;
@@ -22,8 +21,8 @@ impl_outer_origin! {
 	pub enum Origin for Test {}
 }
 
-const BASE_UNIT: u64 = 1000;
-static LAST_PRICE: AtomicU64 = AtomicU64::new(BASE_UNIT);
+const TEST_BASE_UNIT: u64 = 1000;
+static LAST_PRICE: AtomicU64 = AtomicU64::new(TEST_BASE_UNIT);
 pub struct RandomPrice;
 
 impl FetchPrice<Coins> for RandomPrice {
@@ -58,7 +57,7 @@ parameter_types! {
 	pub const MaximumBids: u64 = 10;
 	// adjust supply every second block
 	pub const AdjustmentFrequency: u64 = 2;
-	pub const BaseUnit: u64 = BASE_UNIT;
+	pub const BaseUnit: u64 = TEST_BASE_UNIT;
 	pub const InitialSupply: u64 = 100 * BaseUnit::get();
 	pub const MinimumSupply: u64 = BaseUnit::get();
 	pub const MinimumBondPrice: Perbill = Perbill::from_percent(10);
@@ -173,7 +172,7 @@ fn transfer_test() {
 	new_test_ext().execute_with(|| {
 		let first_acc = 1;
 		let second_acc = 2;
-		let amount = BASE_UNIT;
+		let amount = TEST_BASE_UNIT;
 		let from_balance_before = Stablecoin::get_balance(first_acc);
 		let to_balance_before = Stablecoin::get_balance(second_acc);
 		assert_ok!(Stablecoin::transfer_from_to(&first_acc, &second_acc, amount));
@@ -188,7 +187,7 @@ fn transfer_test() {
 fn slash_test() {
 	new_test_ext().execute_with(|| {
 		let acc = 1;
-		let amount = BASE_UNIT;
+		let amount = TEST_BASE_UNIT;
 		let balance_before = Stablecoin::get_balance(acc);
 		assert_eq!(Stablecoin::slash(&acc, amount), 0);
 		assert_eq!(Stablecoin::get_balance(acc), balance_before - amount);
@@ -601,7 +600,9 @@ fn contract_supply_test() {
 
 		let bids = Stablecoin::bond_bids();
 		assert_eq!(bids.len(), 1, "exactly one bid should have been removed");
-		let remainging_bid_quantity = saturated_mul(Fixed64::from_rational(667, 1_000), BaseUnit::get());
+		let remainging_bid_quantity = Fixed64::from_rational(667, 1_000)
+			.saturated_multiply_accumulate(BaseUnit::get())
+			- BaseUnit::get();
 		assert_eq!(
 			bids[0],
 			Bid::new(2, Perbill::from_percent(75), remainging_bid_quantity)
@@ -640,7 +641,15 @@ fn expand_or_contract_quickcheck() {
 				// this assert might actually produce a false positive
 				// as there might be errors returned that are the correct
 				// behavior for the given parameters
-				assert_ok!(Stablecoin::expand_or_contract_on_price(price));
+				assert!(matches!(
+					Stablecoin::expand_or_contract_on_price(price),
+					Ok(())
+						| Err(DispatchError::Module {
+							index: 0,
+							error: 0,
+							message: Some("CoinSupplyOverflow")
+						})
+				));
 			}
 
 			TestResult::passed()
@@ -674,4 +683,14 @@ fn expand_or_contract_smoketest() {
 			});
 		}
 	})
+}
+
+#[test]
+fn supply_change_calculation() {
+	let price = TEST_BASE_UNIT + 100;
+	let supply = u64::max_value();
+	let contract_by = Stablecoin::calculate_supply_change(price, TEST_BASE_UNIT, supply);
+	// the error should be low enough
+	assert_ge!(contract_by, u64::max_value() / 10 - 1);
+	assert_le!(contract_by, u64::max_value() / 10 + 1);
 }
