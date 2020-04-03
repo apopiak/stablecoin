@@ -1,14 +1,14 @@
-//! # Transient BoundedDequeue Implementation
+//! # Transient BoundedDeque Implementation
 //!
 //! This module provides a trait and implementation for a ringbuffer that
 //! abstracts over storage items and presents them as a FIFO queue.
 //!
 //! Usage Example:
 //! ```rust,ignore
-//! use storage_adapters::BoundedDequeue;
+//! use storage_adapters::BoundedDeque;
 //!
 //! // Implementation that we will instantiate.
-//! type Transient = BoundedDequeue<
+//! type Transient = BoundedDeque<
 //!     SomeStruct,
 //!     <TestModule as Store>::TestRange,
 //!     <TestModule as Store>::TestMap,
@@ -29,7 +29,7 @@ use num_traits::{WrappingAdd, WrappingSub};
 
 type DefaultIdx = u16;
 /// Transient ringbuffer that sits on top of storage.
-pub struct BoundedDequeue<Item, B, M, Index = DefaultIdx>
+pub struct BoundedDeque<Item, B, M, Index = DefaultIdx>
 where
 	Item: FullCodec,
 	B: StorageValue<(Index, Index), Query = (Index, Index)>,
@@ -42,19 +42,19 @@ where
 }
 
 /// Ringbuffer implementation.
-impl<Item, B, M, Index> BoundedDequeue<Item, B, M, Index>
+impl<Item, B, M, Index> BoundedDeque<Item, B, M, Index>
 where
 	Item: FullCodec,
 	B: StorageValue<(Index, Index), Query = (Index, Index)>,
 	M: StorageMap<Index, Item, Query = Item>,
 	Index: FullCodec + Eq + Ord + WrappingAdd + WrappingSub + From<u8> + Copy,
 {
-	/// Create a new `BoundedDequeue` based on the storage types.
+	/// Create a new `BoundedDeque` based on the storage types.
 	///
 	/// Initializes itself from the `Bounds` storage.
-	pub fn new() -> BoundedDequeue<Item, B, M, Index> {
+	pub fn new() -> BoundedDeque<Item, B, M, Index> {
 		let (start, length) = B::get();
-		BoundedDequeue {
+		BoundedDeque {
 			start,
 			length,
 			_phantom: PhantomData,
@@ -135,7 +135,7 @@ where
 	}
 }
 
-impl<Item, B, M, Index> Drop for BoundedDequeue<Item, B, M, Index>
+impl<Item, B, M, Index> Drop for BoundedDeque<Item, B, M, Index>
 where
 	Item: FullCodec,
 	B: StorageValue<(Index, Index), Query = (Index, Index)>,
@@ -238,7 +238,7 @@ mod tests {
 	// ringbuffer
 
 	// Implementation that we will instantiate.
-	type Transient = BoundedDequeue<
+	type Transient = BoundedDeque<
 		SomeStruct,
 		<TestModule as Store>::TestRange,
 		<TestModule as Store>::TestMap,

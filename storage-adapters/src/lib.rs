@@ -9,4 +9,4 @@ pub mod priority_queue;
 pub mod bounded_deque;
 
 pub use priority_queue::BoundedPriorityQueue;
-pub use bounded_deque::BoundedDequeue;
+pub use bounded_deque::BoundedDeque;
