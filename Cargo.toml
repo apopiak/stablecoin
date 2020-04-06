@@ -1,3 +1,11 @@
 
+[profile.release]
+panic = 'unwind'
+
 [workspace]
-members = ["storage-adapters", "pallets/*"]
+members = [
+    'node',
+    'runtime',
+    "storage-adapters",
+    "pallets/*",
+]

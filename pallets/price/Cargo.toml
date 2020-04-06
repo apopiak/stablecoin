@@ -1,0 +1,35 @@
+[package]
+authors = ['Anonymous']
+edition = '2018'
+name = 'pallet-price'
+version = "0.0.1"
+license = "Unlicense"
+homepage = "https://substrate.dev"
+repository = "https://github.com/paritytech/substrate/"
+description = "FRAME pallet template"
+
+[dependencies]
+codec = { package = "parity-scale-codec", version = "1.0.0", default-features = false, features = [ "derive"] }
+safe-mix = { default-features = false, version = '1.0.0' }
+# substrate deps
+frame-support = { default-features = false, version = "2.0.0-alpha.3" }
+system = { default-features = false, version = "2.0.0-alpha.3", package = 'frame-system' }
+# pallets
+price-fetch = { default-features = false, git = "https://github.com/apopiak/substrate-offchain-pricefetch", rev = "14fe82ecc7e54a554dd1c60fe593f6e171cebe9b", package = "pallet-price-fetch", version = "1.1.0" }
+stablecoin = { default-features = false, package = 'pallet-stablecoin', version = "0.0.*", path = "../stablecoin" }
+
+[dev-dependencies]
+sp-core = { default-features = false, version = "2.0.0-alpha.3" }
+sp-io = { default-features = false, version = "2.0.0-alpha.3" }
+sp-runtime = { default-features = false, version = "2.0.0-alpha.3" }
+
+[features]
+default = ['std']
+std = [
+    'codec/std',
+    'frame-support/std',
+    'safe-mix/std',
+    'system/std',
+    'stablecoin/std',
+    'price-fetch/std',
+]

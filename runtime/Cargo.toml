@@ -1,0 +1,74 @@
+[package]
+name = "node-template-runtime"
+version = "2.0.0-alpha.3"
+authors = ["Anonymous"]
+edition = "2018"
+license = "Unlicense"
+homepage = "https://substrate.dev"
+repository = "https://github.com/paritytech/substrate/"
+
+[dependencies]
+codec = { package = "parity-scale-codec", version = "1.0.0", default-features = false, features = ["derive"] }
+
+aura = { version = "2.0.0-alpha.3", default-features = false, package = "pallet-aura" }
+balances = { version = "2.0.0-alpha.3", default-features = false, package = "pallet-balances" }
+frame-support = { version = "2.0.0-alpha.3", default-features = false }
+grandpa = { version = "2.0.0-alpha.3", default-features = false, package = "pallet-grandpa" }
+randomness-collective-flip = { version = "2.0.0-alpha.3", default-features = false, package = "pallet-randomness-collective-flip" }
+sudo = { version = "2.0.0-alpha.3", default-features = false, package = "pallet-sudo" }
+system = { version = "2.0.0-alpha.3", default-features = false, package = "frame-system" }
+timestamp = { version = "2.0.0-alpha.3", default-features = false, package = "pallet-timestamp" }
+transaction-payment = { version = "2.0.0-alpha.3", default-features = false, package = "pallet-transaction-payment" }
+frame-executive = { version = "2.0.0-alpha.3", default-features = false }
+serde = { version = "1.0.101", optional = true, features = ["derive"] }
+sp-api = { version = "2.0.0-alpha.3", default-features = false }
+sp-block-builder = { default-features = false, version = "2.0.0-alpha.3"}
+sp-consensus-aura = { version = "0.8.0-alpha.3", default-features = false }
+sp-core = { version = "2.0.0-alpha.3", default-features = false }
+sp-inherents = { default-features = false, version = "2.0.0-alpha.3"}
+sp-io = { version = "2.0.0-alpha.3", default-features = false }
+sp-offchain = { version = "2.0.0-alpha.3", default-features = false }
+sp-runtime = { version = "2.0.0-alpha.3", default-features = false }
+sp-session = { version = "2.0.0-alpha.3", default-features = false }
+sp-std = { version = "2.0.0-alpha.3", default-features = false }
+sp-transaction-pool = { version = "2.0.0-alpha.3", default-features = false }
+sp-version = { version = "2.0.0-alpha.3", default-features = false }
+
+price-fetch = { version = "1.1.0", default-features = false, rev = "14fe82ecc7e54a554dd1c60fe593f6e171cebe9b", git = "https://github.com/apopiak/substrate-offchain-pricefetch", package = "pallet-price-fetch" }
+price = { version = "0.0.*", default-features = false, path = "../pallets/price", package = "pallet-price" }
+stablecoin = { version = "0.0.*", default-features = false, package = "pallet-stablecoin", path = "../pallets/stablecoin" }
+
+[build-dependencies]
+wasm-builder-runner = { version = "1.0.5", package = "substrate-wasm-builder-runner" }
+
+[features]
+default = ["std"]
+std = [
+	"aura/std",
+	"balances/std",
+	"codec/std",
+	"frame-executive/std",
+	"frame-support/std",
+	"grandpa/std",
+	"randomness-collective-flip/std",
+	"serde",
+	"sp-api/std",
+	"sp-block-builder/std",
+	"sp-consensus-aura/std",
+	"sp-core/std",
+	"sp-inherents/std",
+	"sp-io/std",
+	"sp-offchain/std",
+	"sp-runtime/std",
+	"sp-session/std",
+	"sp-std/std",
+	"sp-transaction-pool/std",
+	"sp-version/std",
+	"sudo/std",
+	"system/std",
+	"timestamp/std",
+	"transaction-payment/std",
+	"price-fetch/std",
+	"price/std",
+	"stablecoin/std",
+]
