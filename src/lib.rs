@@ -155,7 +155,7 @@ pub trait Trait: system::Trait {
 	type InitialSupply: Get<Coins>;
 	/// The minimum amount of Coins in circulation.
 	///
-	/// Must be higher than `InitialSupply`.
+	/// Must be lower than `InitialSupply`.
 	type MinimumSupply: Get<Coins>;
 }
 
@@ -390,9 +390,9 @@ decl_module! {
 		/// - DB access: 2 storage map reads + 2 storage map writes
 		pub fn send_coins(origin, to: T::AccountId, amount: u64) -> DispatchResult {
 			let sender = ensure_signed(origin)?;
-			let res = Self::transfer_from_to(&sender, &to, amount);
+			Self::transfer_from_to(&sender, &to, amount)?;
 			Self::deposit_event(RawEvent::Transfer(sender, to, amount));
-			res
+			Ok(())
 		}
 
 		/// Bid for `quantity` Coins at a `price`.
