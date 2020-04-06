@@ -30,6 +30,7 @@ sp-consensus = { version = "0.8.0-alpha.3" }
 grandpa = { version = "0.8.0-alpha.3", package = "sc-finality-grandpa" }
 grandpa-primitives = { version = "2.0.0-alpha.3", package = "sp-finality-grandpa" }
 sc-client = { version = "0.8.0-alpha.3" }
+sc-client-api = { version = "2.0.0-alpha.3" }
 sp-runtime = { version = "2.0.0-alpha.3" }
 sc-basic-authorship = {  version = "0.8.0-alpha.3" }
 

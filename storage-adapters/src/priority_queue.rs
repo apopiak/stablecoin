@@ -32,6 +32,8 @@
 //! Note: You might want to introduce a helper function that wraps the complex
 //! types and just returns the object.
 
+use sp_std::prelude::*;
+
 use codec::FullCodec;
 use core::marker::PhantomData;
 use frame_support::{storage::StorageValue, traits::Get};

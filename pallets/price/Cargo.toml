@@ -15,7 +15,7 @@ safe-mix = { default-features = false, version = '1.0.0' }
 frame-support = { default-features = false, version = "2.0.0-alpha.3" }
 system = { default-features = false, version = "2.0.0-alpha.3", package = 'frame-system' }
 # pallets
-price-fetch = { default-features = false, git = "https://github.com/apopiak/substrate-offchain-pricefetch", rev = "14fe82ecc7e54a554dd1c60fe593f6e171cebe9b", package = "pallet-price-fetch", version = "1.1.0" }
+price-fetch = { default-features = false, package = "pallet-price-fetch", version = "1.2.0", path = "../price-fetch" }
 stablecoin = { default-features = false, package = 'pallet-stablecoin', version = "0.0.*", path = "../stablecoin" }
 
 [dev-dependencies]

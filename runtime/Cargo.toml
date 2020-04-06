@@ -8,7 +8,7 @@ homepage = "https://substrate.dev"
 repository = "https://github.com/paritytech/substrate/"
 
 [dependencies]
-codec = { package = "parity-scale-codec", version = "1.0.0", default-features = false, features = ["derive"] }
+codec = { package = "parity-scale-codec", version = "1.2.0", default-features = false, features = ["derive"] }
 
 aura = { version = "2.0.0-alpha.3", default-features = false, package = "pallet-aura" }
 balances = { version = "2.0.0-alpha.3", default-features = false, package = "pallet-balances" }
@@ -34,7 +34,7 @@ sp-std = { version = "2.0.0-alpha.3", default-features = false }
 sp-transaction-pool = { version = "2.0.0-alpha.3", default-features = false }
 sp-version = { version = "2.0.0-alpha.3", default-features = false }
 
-price-fetch = { version = "1.1.0", default-features = false, rev = "14fe82ecc7e54a554dd1c60fe593f6e171cebe9b", git = "https://github.com/apopiak/substrate-offchain-pricefetch", package = "pallet-price-fetch" }
+price-fetch = { version = "1.2.0", default-features = false, path = "../pallets/price-fetch", package = "pallet-price-fetch" }
 price = { version = "0.0.*", default-features = false, path = "../pallets/price", package = "pallet-price" }
 stablecoin = { version = "0.0.*", default-features = false, package = "pallet-stablecoin", path = "../pallets/stablecoin" }
 
