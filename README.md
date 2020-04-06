@@ -86,7 +86,7 @@ use node_template_runtime::{ // ... other imports
         system: Some(SystemConfig { /* elided */ }),
         // ... other configs
         stablecoin: Some(StablecoinConfig {
-			shareholders: endowed_accounts.iter().cloned().map(|acc| (acc, 1)).collect(),
+            shareholders: endowed_accounts.iter().cloned().map(|acc| (acc, 1)).collect(),
         }),
     }
 ```

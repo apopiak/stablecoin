@@ -1,26 +1,33 @@
-//! # Transient BoundedDeque Implementation
+//! # Transient Bounded Deque Implementation
 //!
-//! This module provides a trait and implementation for a ringbuffer that
-//! abstracts over storage items and presents them as a FIFO queue.
+//! This module provides an implementation of a bounded FIFO double ended
+//! queue built on top of a ringbuffer that abstracts over a storage map.
+//! 
+//! The queue is bounded to the maximum amount of values that can be indexed
+//! with the provided `Index` type. So a queue with a `u8` index will be limited
+//! to `u8::max_value() + 1 == 256` values.
+//! 
+//! The queue eagerly inserts and removes values from its underlying storage map
+//! but lazily stores the bounds on `drop` or (explicit calls to) `commit`.
 //!
 //! Usage Example:
 //! ```rust,ignore
 //! use storage_adapters::BoundedDeque;
 //!
 //! // Implementation that we will instantiate.
-//! type Transient = BoundedDeque<
+//! type Queue = BoundedDeque<
 //!     SomeStruct,
 //!     <TestModule as Store>::TestRange,
 //!     <TestModule as Store>::TestMap,
 //! >;
 //! {
-//!     let mut ring = Transient::new();
-//!     ring.push_back(SomeStruct { foo: 1, bar: 2 });
-//! } // `ring.commit()` will be called on `drop` here and syncs to storage
+//!     let mut queue = Queue::new();
+//!     queue.push_back(SomeStruct { foo: 1, bar: 2 });
+//! } // `queue.commit()` will be called on `drop` here and syncs the bounds to storage.
 //! ```
 //!
 //! Note: You might want to introduce a helper function that wraps the complex
-//! types and just returns the boxed trait object.
+//! type and just returns the object.
 
 use codec::FullCodec;
 use core::marker::PhantomData;
@@ -61,6 +68,18 @@ where
 		}
 	}
 
+	/// Create a new `BoundedDeque` based on passed bounds.
+	/// 
+	/// Bounds are assumed to be valid.
+	pub fn from_bounds(start: Index, length: Index) -> BoundedDeque<Item, B, M, Index> {
+		BoundedDeque {
+			start,
+			length,
+			_phantom: PhantomData,
+		}
+	}
+
+	/// Get the index past the last element.
 	fn end(&self) -> Index {
 		self.start.wrapping_add(&self.length)
 	}
@@ -84,8 +103,6 @@ where
 	}
 
 	/// Push an item onto the front of the queue.
-	///
-	/// Equivalent to `push_back` if the queue is empty.
 	/// 
 	/// + Will write over the item at the back if the queue is full.
 	/// + Will insert the new item into storage, but will not update the bounds in storage.
@@ -129,7 +146,9 @@ where
 		self.length == Index::from(0)
 	}
 
-	/// Commit the (potentially) changed bounds to storage.
+	/// Commit the potentially changed bounds to storage.
+	/// 
+	/// Note: Is called on `drop`, so usually does need to be called explicitly.
 	pub fn commit(&self) {
 		B::put((self.start, self.length));
 	}
@@ -234,11 +253,8 @@ mod tests {
 		storage.into()
 	}
 
-	// ------------------------------------------------------------
-	// ringbuffer
-
 	// Implementation that we will instantiate.
-	type Transient = BoundedDeque<
+	type Queue = BoundedDeque<
 		SomeStruct,
 		<TestModule as Store>::TestRange,
 		<TestModule as Store>::TestMap,
@@ -246,11 +262,31 @@ mod tests {
 	>;
 
 	#[test]
+	fn construction() {
+		new_test_ext().execute_with(|| {
+			<TestRange>::put((5, 2));
+			let queue = Queue::new();
+			// bounds are initialized from storage
+			assert_eq!(queue.start, 5);
+			assert_eq!(queue.length, 2);
+
+			let queue = Queue::from_bounds(3, 4);
+			assert_eq!(queue.start, 3);
+			assert_eq!(queue.length, 4);
+			// bounds are not changed in storage when initializing from bounds
+			assert_eq!(TestModule::get_test_range(), (5, 2));
+			queue.commit();
+			// bounds are updated on commit
+			assert_eq!(TestModule::get_test_range(), (3, 4));
+		})
+	}
+
+	#[test]
 	fn simple_push() {
 		new_test_ext().execute_with(|| {
-			let mut ring = Transient::new();
-			ring.push_back(SomeStruct { foo: 1, bar: 2 });
-			ring.commit();
+			let mut queue = Queue::new();
+			queue.push_back(SomeStruct { foo: 1, bar: 2 });
+			queue.commit();
 			let (start, length) = TestModule::get_test_range();
 			assert_eq!((start, length), (0, 1));
 			let some_struct = TestModule::get_test_value(0);
@@ -262,8 +298,8 @@ mod tests {
 	fn drop_does_commit() {
 		new_test_ext().execute_with(|| {
 			{
-				let mut ring = Transient::new();
-				ring.push_back(SomeStruct { foo: 1, bar: 2 });
+				let mut queue = Queue::new();
+				queue.push_back(SomeStruct { foo: 1, bar: 2 });
 			}
 			let (start, length) = TestModule::get_test_range();
 			assert_eq!((start, length), (0, 1));
@@ -275,20 +311,20 @@ mod tests {
 	#[test]
 	fn simple_pop() {
 		new_test_ext().execute_with(|| {
-			let mut ring = Transient::new();
-			ring.push_back(SomeStruct { foo: 1, bar: 2 });
-			ring.push_back(SomeStruct { foo: 3, bar: 4 });
-			ring.push_back(SomeStruct { foo: 5, bar: 6 });
+			let mut queue = Queue::new();
+			queue.push_back(SomeStruct { foo: 1, bar: 2 });
+			queue.push_back(SomeStruct { foo: 3, bar: 4 });
+			queue.push_back(SomeStruct { foo: 5, bar: 6 });
 
-			let item = ring.pop_front();
+			let item = queue.pop_front();
 			assert_eq!(item, Some(SomeStruct { foo: 1, bar: 2 }));
-			ring.commit();
+			queue.commit();
 			let (start, length) = TestModule::get_test_range();
 			assert_eq!((start, length), (1, 2));
 
-			let item = ring.pop_back();
+			let item = queue.pop_back();
 			assert_eq!(item, Some(SomeStruct { foo: 5, bar: 6 }));
-			ring.commit();
+			queue.commit();
 			let (start, length) = TestModule::get_test_range();
 			assert_eq!((start, length), (1, 1));
 		})
@@ -297,12 +333,12 @@ mod tests {
 	#[test]
 	fn overflow_wrap_around() {
 		new_test_ext().execute_with(|| {
-			let mut ring = Transient::new();
+			let mut queue = Queue::new();
 
 			for i in 1..(TestIdx::max_value() as u64) + 2 {
-				ring.push_back(SomeStruct { foo: 42, bar: i });
+				queue.push_back(SomeStruct { foo: 42, bar: i });
 			}
-			ring.commit();
+			queue.commit();
 			let (start, length) = TestModule::get_test_range();
 			assert_eq!(
 				(start, length),
@@ -310,8 +346,8 @@ mod tests {
 				"range should be inverted because the index wrapped around"
 			);
 
-			let item = ring.pop_front();
-			ring.commit();
+			let item = queue.pop_front();
+			queue.commit();
 			let (start, length) = TestModule::get_test_range();
 			assert_eq!((start, length), (2,254));
 			let item = item.expect("an item should be returned");
@@ -320,8 +356,8 @@ mod tests {
 				"the struct for field `bar = 2`, was placed at index 1"
 			);
 
-			let item = ring.pop_front();
-			ring.commit();
+			let item = queue.pop_front();
+			queue.commit();
 			let (start, length) = TestModule::get_test_range();
 			assert_eq!((start,length), (3, 253));
 			let item = item.expect("an item should be returned");
@@ -331,15 +367,15 @@ mod tests {
 			);
 
 			for i in 1..4 {
-				ring.push_back(SomeStruct { foo: 21, bar: i });
+				queue.push_back(SomeStruct { foo: 21, bar: i });
 			}
-			ring.commit();
+			queue.commit();
 			let (start, length) = TestModule::get_test_range();
 			assert_eq!((start, length), (4, 255));
 
 			// push_front should overwrite the most recent entry if the queue is full
-			ring.push_front(SomeStruct { foo: 4, bar: 4 });
-			ring.commit();
+			queue.push_front(SomeStruct { foo: 4, bar: 4 });
+			queue.commit();
 			let (start, length) = TestModule::get_test_range();
 			assert_eq!((start, length), (3, 255));
 		})
@@ -348,14 +384,14 @@ mod tests {
 	#[test]
 	fn simple_push_front() {
 		new_test_ext().execute_with(|| {
-			let mut ring = Transient::new();
-			ring.push_front(SomeStruct { foo: 1, bar: 2 });
-			ring.commit();
+			let mut queue = Queue::new();
+			queue.push_front(SomeStruct { foo: 1, bar: 2 });
+			queue.commit();
 			let (start, length) = TestModule::get_test_range();
 			assert_eq!((start, length), (TestIdx::max_value(), 1));
 
-			ring.push_front(SomeStruct { foo: 20, bar: 42 });
-			ring.commit();
+			queue.push_front(SomeStruct { foo: 20, bar: 42 });
+			queue.commit();
 			let (start, length) = TestModule::get_test_range();
 			assert_eq!((start, length), (TestIdx::max_value() - 1, 2));
 		})
