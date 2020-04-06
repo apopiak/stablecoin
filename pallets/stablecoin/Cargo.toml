@@ -19,7 +19,7 @@ std = [
 
 [dependencies]
 # local deps
-adapters = { default-features = false, package = 'storage-adapters', version = '0.0.*', path = './storage-adapters' }
+adapters = { default-features = false, package = 'storage-adapters', version = '0.0.*', path = '../../storage-adapters' }
 # regular deps
 codec = { default-features = false, features = ['derive'], package = 'parity-scale-codec', version = '1.2.0' }
 num-rational = { default-features = false, version = "0.2" }
