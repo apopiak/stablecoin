@@ -1,37 +1,43 @@
 //! # Transient Bounded Priority Queue Implementation
 //!
-//! This module provides a trait and implementation for a bounded priority queue
+//! This module provides an implementation for a bounded priority queue
 //! that abstracts over a `Vec` in storage.
+//! 
+//! The priority queue is bounded to the value provided by the passed `MaxLength` type.
+//! If it reaches its maximum when being `push`ed into it will return the evicted item.
+//! 
+//! The queue lazily syncs to the underlying storage on `drop` or (explicit calls to)
+//! `commit`.
 //!
 //! Usage Example:
 //! ```rust,ignore
-//! use priority_queue::{BoundedPriorityQueueTrait, BoundedPriorityQueue};
+//! use storage_adapters::BoundedPriorityQueue;
 //! 
 //! parameter_types! {
 //!     pub const MaximumLength: u64 = 42;
 //! }
 //!
 //! // Implementation that we will instantiate.
-//! type Transient = BoundedPriorityQueue<
+//! type Queue = BoundedPriorityQueue<
 //!     SomeStruct,
 //!     <TestModule as Store>::Items,
 //!     MaximumLength,
 //! >;
 //! {
-//!     let mut queue = Transient::new();
+//!     let mut queue = Queue::new();
 //!     queue.push(SomeStruct { foo: 1, bar: 2 });
-//! } // `queue.commit()` will be called on `drop` here and syncs to storage
+//! } // `queue.commit()` will be called on `drop` here and syncs to storage.
 //! ```
 //!
 //! Note: You might want to introduce a helper function that wraps the complex
-//! types and just returns the boxed trait object.
+//! types and just returns the object.
 
 use codec::FullCodec;
 use core::marker::PhantomData;
 use frame_support::{storage::StorageValue, traits::Get};
 use core::cmp::Ord;
 
-/// Transient backing data that is the backbone of the trait object.
+/// Queue backing data that is the backbone of the trait object.
 pub struct BoundedPriorityQueue<Item, Storage, MaxLength>
 where
 	Item: FullCodec + Ord + Clone,
@@ -48,7 +54,7 @@ where
 	Storage: StorageValue<Vec<Item>, Query = Vec<Item>>,
 	MaxLength: Get<u64>,
 {
-	/// Create a new `BoundedPriorityQueue` that backs the priority queue implementation.
+	/// Create a new `BoundedPriorityQueue`.
 	///
 	/// Initializes itself from storage with the `Storage` type.
 	pub fn new() -> BoundedPriorityQueue<Item, Storage, MaxLength> {
@@ -59,14 +65,9 @@ where
 		}
 	}
 
-	/// Commit the (potentially) changed backing `Vec` to storage.
-	pub fn commit(&mut self) {
-		Storage::put(self.items.clone());
-	}
-
 	/// Sort a new item into the queue according to its priority.
 	/// 
-	/// Will return the smallest (according to `Ord`) item if length increased
+	/// Will return the smallest (according to `Ord`) item if length increases
 	/// over `MaxLength` otherwise.
 	// TODO: This could be abused by an attacker kicking out other items with the same
 	//       value.
@@ -82,7 +83,7 @@ where
 		None
 	}
 
-	/// Pop the greates item from the queue.
+	/// Pop the greatest item from the queue.
 	///
 	/// Returns `None` if the queue is empty.
 	pub fn pop(&mut self) -> Option<Item> {
@@ -92,6 +93,11 @@ where
 	/// Return whether the queue is empty.
 	pub fn is_empty(&self) -> bool {
 		self.items.is_empty()
+	}
+
+	/// Commit the potentially changed backing `Vec` to storage.
+	pub fn commit(&mut self) {
+		Storage::put(self.items.clone());
 	}
 }
 
@@ -202,12 +208,12 @@ mod tests {
 	}
 
 	// Implementation that we will instantiate.
-	type Transient = BoundedPriorityQueue<SomeStruct, <TestModule as Store>::TestItems, MaxLength>;
+	type Queue = BoundedPriorityQueue<SomeStruct, <TestModule as Store>::TestItems, MaxLength>;
 
 	#[test]
 	fn simple_push() {
 		new_test_ext().execute_with(|| {
-			let mut queue = Transient::new();
+			let mut queue = Queue::new();
 			queue.push(SomeStruct { foo: 1, bar: 2 });
 			queue.commit();
 			let items = TestModule::get_items();
@@ -218,7 +224,7 @@ mod tests {
 	#[test]
 	fn simple_pop() {
 		new_test_ext().execute_with(|| {
-			let mut queue = Transient::new();
+			let mut queue = Queue::new();
 			queue.push(SomeStruct { foo: 4, bar: 2 });
 			queue.push(SomeStruct { foo: 1, bar: 2 });
 			queue.push(SomeStruct { foo: 3, bar: 2 });
@@ -236,7 +242,7 @@ mod tests {
 	#[test]
 	fn push_more_than_max_length() {
 		new_test_ext().execute_with(|| {
-			let mut queue = Transient::new();
+			let mut queue = Queue::new();
 			let bar = 42;
 			for i in 0..MaxLength::get() {
 				assert_eq!(queue.push(SomeStruct { foo: i as u64, bar}), None);
