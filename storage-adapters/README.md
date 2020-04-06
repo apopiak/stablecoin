@@ -1,4 +1,4 @@
-`storage-adapters = '0.0.2'`
+`storage-adapters = '0.0.3'`
 > Note: Not published to crates.io
 
 # Transient Storage Adapters
