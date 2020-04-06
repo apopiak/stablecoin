@@ -5,25 +5,20 @@
 //!
 //! Usage Example:
 //! ```rust,ignore
-//! use priority_queue::{BoundedPriorityQueueTrait, PriorityQueueTransient};
+//! use priority_queue::{BoundedPriorityQueueTrait, BoundedPriorityQueue};
 //! 
 //! parameter_types! {
 //!     pub const MaximumLength: u64 = 42;
 //! }
 //!
-//! // Trait object that we will be interacting with.
-//! type Queue = dyn BoundedPriorityQueueTrait<
-//!     SomeStruct,
-//!     MaxLength = MaximumLength
-//! >;
 //! // Implementation that we will instantiate.
-//! type Transient = PriorityQueueTransient<
+//! type Transient = BoundedPriorityQueue<
 //!     SomeStruct,
 //!     <TestModule as Store>::Items,
 //!     MaximumLength,
 //! >;
 //! {
-//!     let mut queue: Box<Queue> = Box::new(Transient::new());
+//!     let mut queue = Transient::new();
 //!     queue.push(SomeStruct { foo: 1, bar: 2 });
 //! } // `queue.commit()` will be called on `drop` here and syncs to storage
 //! ```
@@ -36,35 +31,8 @@ use core::marker::PhantomData;
 use frame_support::{storage::StorageValue, traits::Get};
 use core::cmp::Ord;
 
-/// Trait object presenting the priority queue interface.
-pub trait BoundedPriorityQueueTrait<Item>
-where
-	Item: FullCodec + Ord + Clone,
-{
-	/// The maximum amount of items in the queue.
-	type MaxLength: Get<u64>;
-
-	/// Store all changes made in the underlying storage.
-	///
-	/// Data is not guaranteed to be consistent before this call.
-	/// 
-	/// Implementation note: Call in `drop` to increase ergonomics.
-	fn commit(&mut self);
-	/// Push an item into the queue (will be sorted according to `Ord`).
-	/// 
-	/// Will return the smallest (according to `Ord`) item if length increased
-	/// over `MaxLength` otherwise.
-	fn push(&mut self, i: Item) -> Option<Item>;
-	/// Pop the greates item from the queue.
-	///
-	/// Returns `None` if the queue is empty.
-	fn pop(&mut self) -> Option<Item>;
-	/// Return whether the queue is empty.
-	fn is_empty(&self) -> bool;
-}
-
 /// Transient backing data that is the backbone of the trait object.
-pub struct PriorityQueueTransient<Item, Storage, MaxLength>
+pub struct BoundedPriorityQueue<Item, Storage, MaxLength>
 where
 	Item: FullCodec + Ord + Clone,
 	Storage: StorageValue<Vec<Item>, Query = Vec<Item>>,
@@ -74,46 +42,25 @@ where
 	_phantom: PhantomData<(Storage, MaxLength)>,
 }
 
-impl<Item, Storage, MaxLength> PriorityQueueTransient<Item, Storage, MaxLength>
+impl<Item, Storage, MaxLength> BoundedPriorityQueue<Item, Storage, MaxLength>
 where
 	Item: FullCodec + Ord + Clone,
 	Storage: StorageValue<Vec<Item>, Query = Vec<Item>>,
 	MaxLength: Get<u64>,
 {
-	/// Create a new `PriorityQueueTransient` that backs the priority queue implementation.
+	/// Create a new `BoundedPriorityQueue` that backs the priority queue implementation.
 	///
 	/// Initializes itself from storage with the `Storage` type.
-	pub fn new() -> PriorityQueueTransient<Item, Storage, MaxLength> {
+	pub fn new() -> BoundedPriorityQueue<Item, Storage, MaxLength> {
 		let items = Storage::get();
-		PriorityQueueTransient {
+		BoundedPriorityQueue {
 			items,
 			_phantom: PhantomData,
 		}
 	}
-}
-
-impl<Item, Storage, MaxLength> Drop for PriorityQueueTransient<Item, Storage, MaxLength>
-where
-	Item: FullCodec + Ord + Clone,
-	Storage: StorageValue<Vec<Item>, Query = Vec<Item>>,
-	MaxLength: Get<u64>,
-{
-	/// Commit on `drop`.
-	fn drop(&mut self) {
-		<Self as BoundedPriorityQueueTrait<Item>>::commit(self);
-	}
-}
-
-impl<Item, Storage, MaxLength> BoundedPriorityQueueTrait<Item> for PriorityQueueTransient<Item, Storage, MaxLength>
-where
-	Item: FullCodec + Ord + Clone,
-	Storage: StorageValue<Vec<Item>, Query = Vec<Item>>,
-	MaxLength: Get<u64>,
-{
-	type MaxLength = MaxLength;
 
 	/// Commit the (potentially) changed backing `Vec` to storage.
-	fn commit(&mut self) {
+	pub fn commit(&mut self) {
 		Storage::put(self.items.clone());
 	}
 
@@ -123,7 +70,7 @@ where
 	/// over `MaxLength` otherwise.
 	// TODO: This could be abused by an attacker kicking out other items with the same
 	//       value.
-	fn push(&mut self, item: Item) -> Option<Item> {
+	pub fn push(&mut self, item: Item) -> Option<Item> {
 		let index = self
 			.items
 			.binary_search_by(|it| it.cmp(&item))
@@ -138,20 +85,31 @@ where
 	/// Pop the greates item from the queue.
 	///
 	/// Returns `None` if the queue is empty.
-	fn pop(&mut self) -> Option<Item> {
+	pub fn pop(&mut self) -> Option<Item> {
 		self.items.pop()
 	}
 
 	/// Return whether the queue is empty.
-	fn is_empty(&self) -> bool {
+	pub fn is_empty(&self) -> bool {
 		self.items.is_empty()
+	}
+}
+
+impl<Item, Storage, MaxLength> Drop for BoundedPriorityQueue<Item, Storage, MaxLength>
+where
+	Item: FullCodec + Ord + Clone,
+	Storage: StorageValue<Vec<Item>, Query = Vec<Item>>,
+	MaxLength: Get<u64>,
+{
+	/// Commit on `drop`.
+	fn drop(&mut self) {
+		self.commit();
 	}
 }
 
 #[cfg(test)]
 mod tests {
 	use super::*;
-	use BoundedPriorityQueueTrait;
 
 	use codec::{Decode, Encode};
 	use core::cmp::Ordering;
@@ -243,15 +201,13 @@ mod tests {
 		pub const MaxLength: u64 = 20;
 	}
 
-	// Trait object that we will be interacting with.
-	type BoundedQueue = dyn BoundedPriorityQueueTrait<SomeStruct, MaxLength = MaxLength>;
 	// Implementation that we will instantiate.
-	type Transient = PriorityQueueTransient<SomeStruct, <TestModule as Store>::TestItems, MaxLength>;
+	type Transient = BoundedPriorityQueue<SomeStruct, <TestModule as Store>::TestItems, MaxLength>;
 
 	#[test]
 	fn simple_push() {
 		new_test_ext().execute_with(|| {
-			let mut queue: Box<BoundedQueue> = Box::new(Transient::new());
+			let mut queue = Transient::new();
 			queue.push(SomeStruct { foo: 1, bar: 2 });
 			queue.commit();
 			let items = TestModule::get_items();
@@ -262,7 +218,7 @@ mod tests {
 	#[test]
 	fn simple_pop() {
 		new_test_ext().execute_with(|| {
-			let mut queue: Box<BoundedQueue> = Box::new(Transient::new());
+			let mut queue = Transient::new();
 			queue.push(SomeStruct { foo: 4, bar: 2 });
 			queue.push(SomeStruct { foo: 1, bar: 2 });
 			queue.push(SomeStruct { foo: 3, bar: 2 });
@@ -280,7 +236,7 @@ mod tests {
 	#[test]
 	fn push_more_than_max_length() {
 		new_test_ext().execute_with(|| {
-			let mut queue: Box<BoundedQueue> = Box::new(Transient::new());
+			let mut queue = Transient::new();
 			let bar = 42;
 			for i in 0..MaxLength::get() {
 				assert_eq!(queue.push(SomeStruct { foo: i as u64, bar}), None);

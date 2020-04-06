@@ -127,15 +127,13 @@ fn new_test_ext_with(shareholders: Vec<AccountId>) -> sp_io::TestExternalities {
 // ------------------------------------------------------------
 // utils
 type BondT = Bond<AccountId, BlockNumber>;
-// Trait object that we will be interacting with.
-type RingBuffer = dyn RingBufferTrait<BondT>;
 // Implementation that we will instantiate.
 type Transient =
-	RingBufferTransient<BondT, <Stablecoin as Store>::BondsRange, <Stablecoin as Store>::Bonds, BondIndex>;
+	BoundedDeque<BondT, <Stablecoin as Store>::BondsRange, <Stablecoin as Store>::Bonds, BondIndex>;
 
 fn add_bond(bond: BondT) {
-	let mut bonds: Box<RingBuffer> = Box::new(Transient::new());
-	bonds.push(bond);
+	let mut bonds = Transient::new();
+	bonds.push_back(bond);
 	bonds.commit();
 }
 
@@ -307,9 +305,9 @@ fn adding_bonds() {
 		let payout = Fixed64::from_rational(20, 100).saturated_multiply_accumulate(BaseUnit::get());
 		add_bond(Stablecoin::new_bond(3, payout));
 
-		let (start, end) = Stablecoin::bonds_range();
+		let (start, length) = Stablecoin::bonds_range();
 		// computing the length this way is fine because there was no overflow
-		assert_eq!(end - start, 1);
+		assert_eq!(length, 1);
 		let bond = &Stablecoin::get_bond(start);
 		assert_eq!(bond.expiration, System::block_number() + ExpirationPeriod::get());
 	})
@@ -323,9 +321,9 @@ fn expire_bonds() {
 		let payout = Fixed64::from_rational(20, 100).saturated_multiply_accumulate(BaseUnit::get());
 		add_bond(Stablecoin::new_bond(acc, payout));
 
-		let (start, end) = Stablecoin::bonds_range();
+		let (start, length) = Stablecoin::bonds_range();
 		// computing the length this way is fine because there was no overflow
-		assert_eq!(end - start, 1);
+		assert_eq!(length, 1);
 		let bond = &Stablecoin::get_bond(start);
 		assert_eq!(bond.expiration, System::block_number() + ExpirationPeriod::get());
 
@@ -355,9 +353,9 @@ fn expire_bonds_and_expand_supply() {
 		let payout = Fixed64::from_rational(20, 100).saturated_multiply_accumulate(BaseUnit::get());
 		add_bond(Stablecoin::new_bond(first_acc, payout));
 
-		let (start, end) = Stablecoin::bonds_range();
+		let (start, length) = Stablecoin::bonds_range();
 		// computing the length this way is fine because there was no overflow
-		assert_eq!(end - start, 1);
+		assert_eq!(length, 1);
 		let bond = &Stablecoin::get_bond(start);
 		assert_eq!(bond.expiration, System::block_number() + ExpirationPeriod::get());
 
@@ -374,18 +372,18 @@ fn expire_bonds_and_expand_supply() {
 		add_bond(Stablecoin::new_bond(first_acc, payout));
 
 		// check bonds length
-		let (start, end) = Stablecoin::bonds_range();
+		let (_, length) = Stablecoin::bonds_range();
 		// computing the length this way is fine because there was no overflow
-		assert_eq!(end - start, 5);
+		assert_eq!(length, 5);
 		// Increase block number by one so that we reach the first bond's expiration block number.
 		System::set_block_number(System::block_number() + 1);
 		// expand the supply, only hitting the last bond that was added to the queue, but not fully filling it
 		let new_coins = payout;
 		assert_ok!(Stablecoin::expand_supply(Stablecoin::coin_supply(), new_coins));
 		// make sure there are only three bonds left (the first one expired, the second one got consumed)
-		let (start, end) = Stablecoin::bonds_range();
+		let (_, length) = Stablecoin::bonds_range();
 		// computing the length this way is fine because there was no overflow
-		assert_eq!(end - start, 3);
+		assert_eq!(length, 3);
 		// make sure the first account's balance hasn't changed
 		assert_eq!(prev_first_acc_balance, Stablecoin::get_balance(first_acc));
 		// make sure the second account's balance has increased by `new_coins`
@@ -406,9 +404,9 @@ fn expire_bonds_and_expand_supply() {
 		assert_ok!(Stablecoin::expand_supply(intermediate_supply, new_coins));
 
 		// make sure there are no bonds left (they have all expired)
-		let (start, end) = Stablecoin::bonds_range();
+		let (_, length) = Stablecoin::bonds_range();
 		// computing the length this way is fine because there was no overflow
-		assert_eq!(end - start, 0);
+		assert_eq!(length, 0);
 
 		// make sure first and second's balances haven't changed
 		assert_eq!(prev_first_acc_balance, Stablecoin::get_balance(first_acc));
