@@ -2645,7 +2645,7 @@ dependencies = [
 
 [[package]]
 name = "node-template"
-version = "2.0.0-alpha.3"
+version = "2.0.0-alpha.5"
 dependencies = [
  "futures 0.3.4",
  "log",
@@ -2674,7 +2674,7 @@ dependencies = [
 
 [[package]]
 name = "node-template-runtime"
-version = "2.0.0-alpha.3"
+version = "2.0.0-alpha.5"
 dependencies = [
  "frame-executive",
  "frame-support",

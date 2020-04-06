@@ -12,16 +12,16 @@ description = "FRAME pallet template"
 codec = { package = "parity-scale-codec", version = "1.0.0", default-features = false, features = [ "derive"] }
 safe-mix = { default-features = false, version = '1.0.0' }
 # substrate deps
-frame-support = { default-features = false, version = "2.0.0-alpha.3" }
-system = { default-features = false, version = "2.0.0-alpha.3", package = 'frame-system' }
+frame-support = { default-features = false, version = "2.0.0-alpha.5" }
+system = { default-features = false, version = "2.0.0-alpha.5", package = 'frame-system' }
 # pallets
 price-fetch = { default-features = false, package = "pallet-price-fetch", version = "1.2.0", path = "../price-fetch" }
 stablecoin = { default-features = false, package = 'pallet-stablecoin', version = "0.0.*", path = "../stablecoin" }
 
 [dev-dependencies]
-sp-core = { default-features = false, version = "2.0.0-alpha.3" }
-sp-io = { default-features = false, version = "2.0.0-alpha.3" }
-sp-runtime = { default-features = false, version = "2.0.0-alpha.3" }
+sp-core = { default-features = false, version = "2.0.0-alpha.5" }
+sp-io = { default-features = false, version = "2.0.0-alpha.5" }
+sp-runtime = { default-features = false, version = "2.0.0-alpha.5" }
 
 [features]
 default = ['std']

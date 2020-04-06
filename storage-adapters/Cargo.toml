@@ -17,15 +17,15 @@ std = [
 
 [dependencies]
 codec = { default-features = false, features = ['derive'], package = 'parity-scale-codec', version = '1.2.0' }
-frame-support = { default-features = false, version = '2.0.0-alpha.3' }
+frame-support = { default-features = false, version = '2.0.0-alpha.5' }
 num-traits = { default-features = false, version = "0.2.11" }
-sp-std = { default-features = false, version = '2.0.0-alpha.3' }
+sp-std = { default-features = false, version = '2.0.0-alpha.5' }
 
 # dev-dependencies that have to be dependencies because of this cargo issue:
 # https://github.com/rust-lang/cargo/issues/6915
-sp-io = { default-features = false, version = '2.0.0-alpha.3' }
-sp-runtime = { default-features = false, version = '2.0.0-alpha.3' }
-system = { default-features = false, package = 'frame-system', version = '2.0.0-alpha.3' }
+sp-io = { default-features = false, version = '2.0.0-alpha.5' }
+sp-runtime = { default-features = false, version = '2.0.0-alpha.5' }
+system = { default-features = false, package = 'frame-system', version = '2.0.0-alpha.5' }
 
 [dev-dependencies]
-sp-core = { default-features = false, version = '2.0.0-alpha.3' }
+sp-core = { default-features = false, version = '2.0.0-alpha.5' }
