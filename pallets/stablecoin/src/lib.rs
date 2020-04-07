@@ -771,6 +771,7 @@ impl<T: Trait> Module<T> {
 			bonds.push_back(bond);
 		}
 		<CoinSupply>::put(new_supply);
+		native::info!("contracted supply by: {}", burned);
 		Self::deposit_event(RawEvent::ContractedSupply(burned));
 		Ok(())
 	}
@@ -867,8 +868,9 @@ impl<T: Trait> Module<T> {
 			}
 		}
 		// safe to do this late because of the test in the first line of the function
-		// safe to substrate remaining because we initialize it with amount and never increase it
+		// safe to subtract remaining because we initialize it with amount and never increase it
 		let new_supply = coin_supply + amount - remaining;
+		native::info!("expanded supply by paying out bonds: {}", amount - remaining);
 		if remaining > 0 {
 			// relies on supply being updated in `hand_out_coins`
 			Self::hand_out_coins(&Self::shares(), remaining, new_supply)
@@ -928,6 +930,7 @@ impl<T: Trait> Module<T> {
 		// safe to do this late because of the test in the first line of the function
 		let new_supply = coin_supply + amount;
 		<CoinSupply>::put(new_supply);
+		native::info!("expanded supply by handing out coins: {}", amount);
 		Ok(())
 	}
 
