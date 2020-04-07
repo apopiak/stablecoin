@@ -1,0 +1,41 @@
+[package]
+name = "node-template"
+version = "2.0.0-alpha.5"
+authors = ["Anonymous"]
+edition = "2018"
+license = "Unlicense"
+build = "build.rs"
+homepage = "https://substrate.dev"
+repository = "https://github.com/paritytech/substrate/"
+
+[[bin]]
+name = "node-template"
+
+[dependencies]
+futures = "0.3.1"
+log = "0.4.8"
+structopt = "0.3.8"
+
+sc-cli = { version = "0.8.0-alpha.3" }
+sp-core = { version = "2.0.0-alpha.5" }
+sc-executor = { version = "0.8.0-alpha.3" }
+sc-service = { version = "0.8.0-alpha.3" }
+sp-inherents = { version = "2.0.0-alpha.5" }
+sc-transaction-pool = { version = "2.0.0-alpha.5" }
+sp-transaction-pool = { version = "2.0.0-alpha.5" }
+sc-network = { version = "0.8.0-alpha.3" }
+sc-consensus-aura = { version = "0.8.0-alpha.3" }
+sp-consensus-aura = { version = "0.8.0-alpha.3" }
+sp-consensus = { version = "0.8.0-alpha.3" }
+grandpa = { version = "0.8.0-alpha.3", package = "sc-finality-grandpa" }
+grandpa-primitives = { version = "2.0.0-alpha.5", package = "sp-finality-grandpa" }
+sc-client = { version = "0.8.0-alpha.3" }
+sc-client-api = { version = "2.0.0-alpha.5" }
+sp-runtime = { version = "2.0.0-alpha.5" }
+sc-basic-authorship = {  version = "0.8.0-alpha.3" }
+
+node-template-runtime = { version = "2.0.0-alpha.5", path = "../runtime" }
+
+[build-dependencies]
+vergen = "3.0.4"
+build-script-utils = { version = "2.0.0-alpha.5", package = "substrate-build-script-utils" }

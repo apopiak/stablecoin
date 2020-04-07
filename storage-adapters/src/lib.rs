@@ -10,6 +10,7 @@
 //! The adapters generally try to do as few reads and writes from and to storage
 //! as possible which is why they provide `commit` functions that are called on
 //! `drop`.
+#![cfg_attr(not(feature = "std"), no_std)]
 
 pub mod priority_queue;
 pub mod bounded_deque;
