@@ -272,7 +272,9 @@ decl_event!(
 		BondPartiallyFulfilled(AccountId, u64),
 		/// A bond expired and was removed from the bond queue.
 		BondExpired(AccountId, u64),
-		/// All bids below the given price were cancelled for the account.
+		/// All bids at and above the given price were cancelled for the account.
+		CancelledBidsAbove(AccountId, Perbill),
+		/// All bids at and below the given price were cancelled for the account.
 		CancelledBidsBelow(AccountId, Perbill),
 		/// All bids were cancelled for the account.
 		CancelledBids(AccountId),
@@ -441,6 +443,16 @@ decl_module! {
 			// ↓ update ↓
 			Self::cancel_bids(|bid| bid.account == who && bid.price <= price);
 			Self::deposit_event(RawEvent::CancelledBidsBelow(who, price));
+
+			Ok(())
+		}
+
+		pub fn cancel_bids_at_or_above(origin, price: Perbill) -> DispatchResult {
+			let who = ensure_signed(origin)?;
+			// ↑ verify ↑
+			// ↓ update ↓
+			Self::cancel_bids(|bid| bid.account == who && bid.price >= price);
+			Self::deposit_event(RawEvent::CancelledBidsAbove(who, price));
 
 			Ok(())
 		}
